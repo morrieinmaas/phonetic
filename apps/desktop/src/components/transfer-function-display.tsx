@@ -22,10 +22,12 @@ const mapToLogScale = (
 	return logFreqs.map((targetFreq) => {
 		// Find closest frequency bin
 		let closestIdx = 0;
-		let minDiff = Math.abs(frequencies[0] - targetFreq);
+		let minDiff = Math.abs((frequencies[0] ?? 0) - targetFreq);
 
 		for (let i = 1; i < frequencies.length; i++) {
-			const diff = Math.abs(frequencies[i] - targetFreq);
+			const freq = frequencies[i];
+			if (freq === undefined) continue;
+			const diff = Math.abs(freq - targetFreq);
 			if (diff < minDiff) {
 				minDiff = diff;
 				closestIdx = i;
