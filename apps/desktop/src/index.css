@@ -83,3 +83,29 @@ body {
 	-webkit-text-fill-color: transparent;
 	background-clip: text;
 }
+
+/* uPlot styling overrides for professional audio appearance */
+.uplot {
+	font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
+}
+
+.uplot .u-legend {
+	display: none; /* Hide default legend, we use custom */
+}
+
+.uplot .u-axis {
+	font-size: 10px;
+}
+
+/* Ensure visualization containers fill available space */
+.viz-container {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	min-height: 0;
+}
+
+.viz-container > div {
+	flex: 1;
+	min-height: 0;
+}

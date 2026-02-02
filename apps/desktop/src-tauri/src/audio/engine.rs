@@ -7,9 +7,11 @@ use std::sync::Arc;
 use std::thread;
 
 use super::generator::{Generator, SignalType};
-use crate::dsp::FftProcessor;
+use super::realtime::configure_audio_thread;
+use crate::dsp::{FftProcessor, TransferFunctionData, TransferFunctionProcessor};
 
 const FFT_SIZE: usize = 2048;
+const DEFAULT_SAMPLE_RATE: f32 = 48000.0;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioState {
@@ -31,17 +33,21 @@ pub struct AudioEngine {
     input_device_name: Arc<Mutex<Option<String>>>,
     output_device_name: Arc<Mutex<Option<String>>>,
     fft_processor: Arc<Mutex<FftProcessor>>,
+    transfer_function_processor: Arc<Mutex<TransferFunctionProcessor>>,
     generator: Arc<Mutex<Generator>>,
     generator_active: Arc<AtomicBool>,
     stop_signal: Arc<AtomicBool>,
     thread_handle: Mutex<Option<thread::JoinHandle<()>>>,
+    // Buffer to store reference (generator) samples for transfer function
+    reference_buffer: Arc<Mutex<Vec<f32>>>,
 }
 
 // SAFETY: AudioEngine is Send + Sync because:
 // - All atomic fields (is_running, sample_rate, buffer_size, generator_active, stop_signal)
 //   are inherently thread-safe via std::sync::atomic
-// - All Mutex-wrapped fields (input_device_name, output_device_name, fft_processor, generator,
-//   thread_handle) use parking_lot::Mutex which is Send + Sync
+// - All Mutex-wrapped fields (input_device_name, output_device_name, fft_processor,
+//   transfer_function_processor, generator, thread_handle, reference_buffer)
+//   use parking_lot::Mutex which is Send + Sync
 // - Arc provides thread-safe reference counting
 // The thread_handle stores a JoinHandle which is Send, and we only mutate it under a Mutex lock.
 // cpal::Stream is not Send+Sync, but we don't store streams - they live in the audio thread only.
@@ -51,19 +57,25 @@ unsafe impl Sync for AudioEngine {}
 impl AudioEngine {
     pub fn new() -> Self {
         let fft_processor = Arc::new(Mutex::new(FftProcessor::new(FFT_SIZE)));
-        let generator = Arc::new(Mutex::new(Generator::new(48000.0)));
+        let transfer_function_processor = Arc::new(Mutex::new(TransferFunctionProcessor::new(
+            FFT_SIZE,
+            DEFAULT_SAMPLE_RATE,
+        )));
+        let generator = Arc::new(Mutex::new(Generator::new(DEFAULT_SAMPLE_RATE as f64)));
 
         Self {
             is_running: Arc::new(AtomicBool::new(false)),
-            sample_rate: Arc::new(AtomicU32::new(48000)),
+            sample_rate: Arc::new(AtomicU32::new(DEFAULT_SAMPLE_RATE as u32)),
             buffer_size: Arc::new(AtomicU32::new(512)),
             input_device_name: Arc::new(Mutex::new(None)),
             output_device_name: Arc::new(Mutex::new(None)),
             fft_processor,
+            transfer_function_processor,
             generator,
             generator_active: Arc::new(AtomicBool::new(false)),
             stop_signal: Arc::new(AtomicBool::new(false)),
             thread_handle: Mutex::new(None),
+            reference_buffer: Arc::new(Mutex::new(Vec::with_capacity(FFT_SIZE * 2))),
         }
     }
 
@@ -136,18 +148,24 @@ impl AudioEngine {
         *self.input_device_name.lock() = Some(input_name.clone());
         *self.output_device_name.lock() = Some(output_name.clone());
 
-        // Update generator sample rate
+        // Update generator and transfer function processor sample rates
         self.generator.lock().set_sample_rate(sample_rate as f64);
+        self.transfer_function_processor
+            .lock()
+            .set_sample_rate(sample_rate as f32);
 
-        // Reset stop signal
+        // Reset stop signal and clear reference buffer
         self.stop_signal.store(false, Ordering::Relaxed);
+        self.reference_buffer.lock().clear();
 
         // Clone Arcs for the audio thread
         let fft_processor = Arc::clone(&self.fft_processor);
+        let transfer_function_processor = Arc::clone(&self.transfer_function_processor);
         let generator = Arc::clone(&self.generator);
         let generator_active = Arc::clone(&self.generator_active);
         let is_running = Arc::clone(&self.is_running);
         let stop_signal = Arc::clone(&self.stop_signal);
+        let reference_buffer = Arc::clone(&self.reference_buffer);
 
         let output_channels = output_config.channels();
 
@@ -160,10 +178,12 @@ impl AudioEngine {
                 buffer_size,
                 output_channels,
                 fft_processor,
+                transfer_function_processor,
                 generator,
                 generator_active,
                 is_running,
                 stop_signal,
+                reference_buffer,
             );
         });
 
@@ -216,6 +236,36 @@ impl AudioEngine {
     pub fn get_spectrum_data(&self) -> Vec<f32> {
         self.fft_processor.lock().get_magnitude_db()
     }
+
+    pub fn get_transfer_function_data(&self) -> TransferFunctionData {
+        self.transfer_function_processor.lock().get_data()
+    }
+
+    pub fn reset_averaging(&self) {
+        self.transfer_function_processor.lock().reset_averaging();
+        log::info!("Transfer function averaging reset");
+    }
+
+    pub fn set_fft_size(&self, size: usize) -> Result<(), String> {
+        if !size.is_power_of_two() {
+            return Err("FFT size must be a power of 2".to_string());
+        }
+        if !(512..=16384).contains(&size) {
+            return Err("FFT size must be between 512 and 16384".to_string());
+        }
+
+        let sample_rate = self.sample_rate.load(Ordering::Relaxed) as f32;
+        self.fft_processor.lock().set_fft_size(size);
+        self.transfer_function_processor.lock().set_fft_size(size);
+
+        // Update sample rate in case it changed
+        self.transfer_function_processor
+            .lock()
+            .set_sample_rate(sample_rate);
+
+        log::info!("FFT size set to {}", size);
+        Ok(())
+    }
 }
 
 impl Default for AudioEngine {
@@ -253,11 +303,16 @@ fn run_audio_streams(
     buffer_size: u32,
     output_channels: u16,
     fft_processor: Arc<Mutex<FftProcessor>>,
+    transfer_function_processor: Arc<Mutex<TransferFunctionProcessor>>,
     generator: Arc<Mutex<Generator>>,
     generator_active: Arc<AtomicBool>,
     is_running: Arc<AtomicBool>,
     stop_signal: Arc<AtomicBool>,
+    reference_buffer: Arc<Mutex<Vec<f32>>>,
 ) {
+    // Set real-time priority for this audio thread
+    configure_audio_thread();
+
     let input_config = StreamConfig {
         channels: 1,
         sample_rate: cpal::SampleRate(sample_rate),
@@ -270,12 +325,33 @@ fn run_audio_streams(
         buffer_size: cpal::BufferSize::Fixed(buffer_size),
     };
 
+    // Clone references for input callback
+    let tf_processor = Arc::clone(&transfer_function_processor);
+    let ref_buffer_for_input = Arc::clone(&reference_buffer);
+
     // Build input stream
     let input_stream = match input_device.build_input_stream(
         &input_config,
         move |data: &[f32], _: &cpal::InputCallbackInfo| {
-            let mut processor = fft_processor.lock();
-            processor.process(data);
+            // Process FFT for spectrum analyzer
+            let mut fft_proc = fft_processor.lock();
+            fft_proc.process(data);
+
+            // Process transfer function if we have reference data
+            let ref_data: Vec<f32>;
+            {
+                let mut ref_buf = ref_buffer_for_input.lock();
+                if ref_buf.len() >= data.len() {
+                    // Take the oldest reference samples matching input length
+                    ref_data = ref_buf.drain(..data.len()).collect();
+                } else {
+                    return; // Not enough reference data yet
+                }
+            }
+
+            // Process transfer function
+            let mut tf_proc = tf_processor.lock();
+            tf_proc.process(data, &ref_data);
         },
         |err| log::error!("Input stream error: {}", err),
         None,
@@ -290,18 +366,32 @@ fn run_audio_streams(
 
     // Build output stream
     let out_channels = output_channels as usize;
+    let max_ref_buffer_size = buffer_size as usize * 4; // Keep a few buffers worth
+
     let output_stream = match output_device.build_output_stream(
         &output_config,
         move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
             // Use Acquire ordering to see any generator configuration changes
             if generator_active.load(Ordering::Acquire) {
                 let mut gen = generator.lock();
+                let mut ref_samples = Vec::with_capacity(data.len() / out_channels);
+
                 // Fill all channels with the same signal
                 for frame in data.chunks_mut(out_channels) {
                     let sample = gen.next_sample();
+                    ref_samples.push(sample);
                     for s in frame.iter_mut() {
                         *s = sample;
                     }
+                }
+
+                // Store reference samples for transfer function
+                let mut ref_buf = reference_buffer.lock();
+                ref_buf.extend_from_slice(&ref_samples);
+                // Prevent unbounded growth
+                let buf_len = ref_buf.len();
+                if buf_len > max_ref_buffer_size {
+                    ref_buf.drain(..buf_len - max_ref_buffer_size);
                 }
             } else {
                 for sample in data.iter_mut() {

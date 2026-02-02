@@ -29,3 +29,12 @@ export interface AudioState {
 
 /** Signal generator types */
 export type SignalType = "sine" | "white_noise" | "pink_noise" | "sweep";
+
+/** Transfer function measurement data */
+export interface TransferFunctionData {
+	magnitude_db: number[];
+	phase_deg: number[];
+	coherence: number[];
+	group_delay_ms: number[];
+	frequencies: number[];
+}
