@@ -1,0 +1,7 @@
+# Rust toolchain configuration for Phonetic
+# Ensures consistent Rust version across all developers and CI
+
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
+targets = ["aarch64-apple-darwin"]

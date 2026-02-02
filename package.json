@@ -1,0 +1,17 @@
+{
+	"name": "phonetic",
+	"private": true,
+	"workspaces": ["apps/*", "packages/*"],
+	"scripts": {
+		"dev": "turbo dev",
+		"build": "turbo build",
+		"check": "turbo check",
+		"check:fix": "turbo check:fix",
+		"test": "turbo test"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^1.9.0",
+		"turbo": "^2.4.0"
+	},
+	"packageManager": "bun@1.3.2"
+}

@@ -1,0 +1,41 @@
+# Cargo configuration for Phonetic
+# Optimized for Apple Silicon macOS
+
+# Default to Apple Silicon target for faster local builds
+[build]
+# Uncomment to default to ARM64 (useful on Apple Silicon)
+# target = "aarch64-apple-darwin"
+
+# Use mold linker if available (faster linking on Linux CI)
+# [target.x86_64-unknown-linux-gnu]
+# linker = "clang"
+# rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+# macOS ARM64 optimizations
+[target.aarch64-apple-darwin]
+rustflags = [
+    # Enable full ARM64 feature set for Apple Silicon
+    "-C", "target-cpu=apple-m1",
+]
+
+# macOS x86_64 (for universal builds if needed)
+[target.x86_64-apple-darwin]
+rustflags = [
+    "-C", "target-cpu=x86-64-v2",
+]
+
+# Optimize development builds for faster iteration
+[profile.dev]
+opt-level = 0
+debug = true
+incremental = true
+
+# Optimize test builds
+[profile.test]
+opt-level = 1
+
+# Release profile (also set in Cargo.toml but keeping here for reference)
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

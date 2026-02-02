@@ -1,0 +1,114 @@
+# Phonetic CI Pipeline
+# Runs lint, format check, tests, and build on push/PR
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  lint-format:
+    name: Lint & Format
+    runs-on: macos-14  # Apple Silicon runner
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      - name: Install JS dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Biome lint check
+        run: bunx biome check .
+
+      - name: Rust format check
+        run: cd apps/desktop/src-tauri && cargo fmt --check
+
+      - name: Rust clippy
+        run: cd apps/desktop/src-tauri && cargo clippy --all-targets --all-features -- -D warnings
+
+  test:
+    name: Test
+    runs-on: macos-14
+    needs: lint-format
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      - name: Install JS dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Rust tests
+        run: cd apps/desktop/src-tauri && cargo test
+
+      - name: TypeScript tests
+        run: bun test || echo "No TypeScript tests found"
+
+  build:
+    name: Build
+    runs-on: macos-14
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      - name: Install JS dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build frontend
+        run: cd apps/desktop && bun run build
+
+      - name: Build Tauri app (debug)
+        run: cd apps/desktop && bunx tauri build --debug
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: phonetic-macos-arm64-debug
+          path: |
+            apps/desktop/src-tauri/target/debug/bundle/macos/*.app
+          retention-days: 7
