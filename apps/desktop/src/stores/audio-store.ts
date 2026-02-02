@@ -139,9 +139,44 @@ export const useAudioStore = create<AudioStore>((set, get) => ({
 		}
 	},
 
-	setGeneratorFrequency: (frequency) => set({ generatorFrequency: frequency }),
-	setGeneratorAmplitude: (amplitude) => set({ generatorAmplitude: amplitude }),
-	setGeneratorType: (type) => set({ generatorType: type }),
+	setGeneratorFrequency: async (frequency) => {
+		set({ generatorFrequency: frequency });
+		// Update the running generator if active
+		const { audioState, generatorType, generatorAmplitude } = get();
+		if (audioState?.generator_active) {
+			try {
+				await audioApi.startGenerator(generatorType, frequency, generatorAmplitude);
+			} catch (_e) {
+				// Silent fail - generator will use new value on next start
+			}
+		}
+	},
+
+	setGeneratorAmplitude: async (amplitude) => {
+		set({ generatorAmplitude: amplitude });
+		// Update the running generator if active
+		const { audioState, generatorType, generatorFrequency } = get();
+		if (audioState?.generator_active) {
+			try {
+				await audioApi.startGenerator(generatorType, generatorFrequency, amplitude);
+			} catch (_e) {
+				// Silent fail - generator will use new value on next start
+			}
+		}
+	},
+
+	setGeneratorType: async (type) => {
+		set({ generatorType: type });
+		// Update the running generator if active
+		const { audioState, generatorFrequency, generatorAmplitude } = get();
+		if (audioState?.generator_active) {
+			try {
+				await audioApi.startGenerator(type, generatorFrequency, generatorAmplitude);
+			} catch (_e) {
+				// Silent fail - generator will use new value on next start
+			}
+		}
+	},
 
 	fetchSpectrum: async () => {
 		try {

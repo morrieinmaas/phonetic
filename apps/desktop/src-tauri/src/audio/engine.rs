@@ -2,7 +2,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, StreamConfig};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::thread;
 
@@ -10,8 +10,40 @@ use super::generator::{Generator, SignalType};
 use super::realtime::configure_audio_thread;
 use crate::dsp::{FftProcessor, TransferFunctionData, TransferFunctionProcessor};
 
+#[cfg(target_os = "macos")]
+use super::coreaudio_backend::{
+    self, CoreAudioConfig, CoreAudioInputStream, CoreAudioOutputStream,
+};
+
 const FFT_SIZE: usize = 2048;
 const DEFAULT_SAMPLE_RATE: f32 = 48000.0;
+
+/// Audio backend selection
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioBackend {
+    /// Cross-platform audio via CPAL (default)
+    Cpal = 0,
+    /// Direct CoreAudio HAL access (macOS only, lower latency)
+    #[cfg(target_os = "macos")]
+    CoreAudio = 1,
+}
+
+impl Default for AudioBackend {
+    fn default() -> Self {
+        Self::Cpal
+    }
+}
+
+impl From<u8> for AudioBackend {
+    fn from(value: u8) -> Self {
+        match value {
+            #[cfg(target_os = "macos")]
+            1 => Self::CoreAudio,
+            _ => Self::Cpal,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioState {
@@ -22,6 +54,8 @@ pub struct AudioState {
     pub output_device: Option<String>,
     pub generator_active: bool,
     pub generator_type: Option<String>,
+    pub backend: String,
+    pub backend_available: Vec<String>,
 }
 
 /// Thread-safe audio engine that can be used with Tauri state.
@@ -40,6 +74,8 @@ pub struct AudioEngine {
     thread_handle: Mutex<Option<thread::JoinHandle<()>>>,
     // Buffer to store reference (generator) samples for transfer function
     reference_buffer: Arc<Mutex<Vec<f32>>>,
+    // Audio backend selection (0 = CPAL, 1 = CoreAudio on macOS)
+    backend: Arc<AtomicU8>,
 }
 
 // SAFETY: AudioEngine is Send + Sync because:
@@ -76,6 +112,7 @@ impl AudioEngine {
             stop_signal: Arc::new(AtomicBool::new(false)),
             thread_handle: Mutex::new(None),
             reference_buffer: Arc::new(Mutex::new(Vec::with_capacity(FFT_SIZE * 2))),
+            backend: Arc::new(AtomicU8::new(AudioBackend::default() as u8)),
         }
     }
 
@@ -90,6 +127,17 @@ impl AudioEngine {
         };
         drop(gen); // Release lock before acquiring others
 
+        let current_backend = AudioBackend::from(self.backend.load(Ordering::Relaxed));
+        let backend_name = match current_backend {
+            AudioBackend::Cpal => "cpal",
+            #[cfg(target_os = "macos")]
+            AudioBackend::CoreAudio => "coreaudio",
+        };
+
+        let mut available = vec!["cpal".to_string()];
+        #[cfg(target_os = "macos")]
+        available.push("coreaudio".to_string());
+
         AudioState {
             is_running: self.is_running.load(Ordering::Acquire),
             sample_rate: self.sample_rate.load(Ordering::Relaxed),
@@ -98,7 +146,26 @@ impl AudioEngine {
             output_device: self.output_device_name.lock().clone(),
             generator_active: is_active,
             generator_type: gen_type,
+            backend: backend_name.to_string(),
+            backend_available: available,
         }
+    }
+
+    /// Set the audio backend (takes effect on next stream start)
+    pub fn set_backend(&self, backend: AudioBackend) -> Result<(), String> {
+        #[cfg(not(target_os = "macos"))]
+        if matches!(backend, AudioBackend::CoreAudio) {
+            return Err("CoreAudio is only available on macOS".to_string());
+        }
+
+        self.backend.store(backend as u8, Ordering::Relaxed);
+        log::info!("Audio backend set to {:?}", backend);
+        Ok(())
+    }
+
+    /// Get current backend
+    pub fn get_backend(&self) -> AudioBackend {
+        AudioBackend::from(self.backend.load(Ordering::Relaxed))
     }
 
     pub fn start_stream(
@@ -109,6 +176,22 @@ impl AudioEngine {
         // Stop any existing stream first
         self.stop_stream();
 
+        let backend = self.get_backend();
+
+        #[cfg(target_os = "macos")]
+        if backend == AudioBackend::CoreAudio {
+            return self.start_coreaudio_stream(input_device_id, output_device_id);
+        }
+
+        self.start_cpal_stream(input_device_id, output_device_id)
+    }
+
+    /// Start audio stream using CPAL backend
+    fn start_cpal_stream(
+        &self,
+        input_device_id: Option<&str>,
+        output_device_id: Option<&str>,
+    ) -> Result<(), String> {
         let host = cpal::default_host();
 
         // Find input device
@@ -171,7 +254,7 @@ impl AudioEngine {
 
         // Spawn audio thread - streams must live in the same thread they're created
         let handle = thread::spawn(move || {
-            run_audio_streams(
+            run_cpal_streams(
                 input_device,
                 output_device,
                 sample_rate,
@@ -191,10 +274,125 @@ impl AudioEngine {
         self.is_running.store(true, Ordering::Relaxed);
 
         log::info!(
-            "Audio stream started: {} -> {}, {} Hz",
+            "Audio stream started (CPAL): {} -> {}, {} Hz",
             input_name,
             output_name,
             sample_rate
+        );
+
+        Ok(())
+    }
+
+    /// Start audio stream using CoreAudio backend (macOS only)
+    #[cfg(target_os = "macos")]
+    fn start_coreaudio_stream(
+        &self,
+        input_device_id: Option<&str>,
+        output_device_id: Option<&str>,
+    ) -> Result<(), String> {
+        let devices = coreaudio_backend::enumerate_devices();
+
+        // Find input device
+        let input_device = match input_device_id {
+            Some(id) => {
+                let name = id.strip_prefix("input:").unwrap_or(id);
+                devices
+                    .iter()
+                    .find(|d| d.is_input && d.name == name)
+                    .ok_or_else(|| format!("Input device not found: {}", id))?
+            }
+            None => devices
+                .iter()
+                .find(|d| {
+                    d.is_input
+                        && coreaudio_backend::get_default_input_device()
+                            .map(|def| def == d.id)
+                            .unwrap_or(false)
+                })
+                .or_else(|| devices.iter().find(|d| d.is_input))
+                .ok_or("No input device available")?,
+        };
+
+        // Find output device
+        let output_device = match output_device_id {
+            Some(id) => {
+                let name = id.strip_prefix("output:").unwrap_or(id);
+                devices
+                    .iter()
+                    .find(|d| d.is_output && d.name == name)
+                    .ok_or_else(|| format!("Output device not found: {}", id))?
+            }
+            None => devices
+                .iter()
+                .find(|d| {
+                    d.is_output
+                        && coreaudio_backend::get_default_output_device()
+                            .map(|def| def == d.id)
+                            .unwrap_or(false)
+                })
+                .or_else(|| devices.iter().find(|d| d.is_output))
+                .ok_or("No output device available")?,
+        };
+
+        let input_name = input_device.name.clone();
+        let output_name = output_device.name.clone();
+        let input_id = input_device.id;
+        let output_id = output_device.id;
+
+        let sample_rate = 48000u32;
+        let buffer_size = 256u32; // Lower buffer for CoreAudio
+
+        // Update state
+        self.sample_rate.store(sample_rate, Ordering::Relaxed);
+        self.buffer_size.store(buffer_size, Ordering::Relaxed);
+        *self.input_device_name.lock() = Some(input_name.clone());
+        *self.output_device_name.lock() = Some(output_name.clone());
+
+        // Update generator and transfer function processor sample rates
+        self.generator.lock().set_sample_rate(sample_rate as f64);
+        self.transfer_function_processor
+            .lock()
+            .set_sample_rate(sample_rate as f32);
+
+        // Reset stop signal and clear reference buffer
+        self.stop_signal.store(false, Ordering::Relaxed);
+        self.reference_buffer.lock().clear();
+
+        // Clone Arcs for the audio thread
+        let fft_processor = Arc::clone(&self.fft_processor);
+        let transfer_function_processor = Arc::clone(&self.transfer_function_processor);
+        let generator = Arc::clone(&self.generator);
+        let generator_active = Arc::clone(&self.generator_active);
+        let is_running = Arc::clone(&self.is_running);
+        let stop_signal = Arc::clone(&self.stop_signal);
+        let reference_buffer = Arc::clone(&self.reference_buffer);
+
+        // Spawn audio thread
+        let handle = thread::spawn(move || {
+            run_coreaudio_streams(
+                input_id,
+                output_id,
+                sample_rate,
+                buffer_size,
+                fft_processor,
+                transfer_function_processor,
+                generator,
+                generator_active,
+                is_running,
+                stop_signal,
+                reference_buffer,
+            );
+        });
+
+        *self.thread_handle.lock() = Some(handle);
+        self.is_running.store(true, Ordering::Relaxed);
+
+        log::info!(
+            "Audio stream started (CoreAudio): {} -> {}, {} Hz, {} samples buffer",
+            input_name,
+            output_name,
+            sample_rate,
+            buffer_size
         );
 
         Ok(())
@@ -295,8 +493,9 @@ fn find_device_by_name(host: &cpal::Host, id: &str, is_input: bool) -> Result<De
         .ok_or_else(|| format!("Device not found: {}", id))
 }
 
+/// Run audio streams using CPAL backend
 #[allow(clippy::too_many_arguments)]
-fn run_audio_streams(
+fn run_cpal_streams(
     input_device: Device,
     output_device: Device,
     sample_rate: u32,
@@ -430,4 +629,135 @@ fn run_audio_streams(
 
     // Streams are dropped here when the thread exits
     is_running.store(false, Ordering::Relaxed);
+}
+
+/// Run audio streams using CoreAudio backend (macOS only)
+#[cfg(target_os = "macos")]
+#[allow(clippy::too_many_arguments)]
+fn run_coreaudio_streams(
+    input_device_id: coreaudio::sys::AudioDeviceID,
+    output_device_id: coreaudio::sys::AudioDeviceID,
+    sample_rate: u32,
+    buffer_size: u32,
+    fft_processor: Arc<Mutex<FftProcessor>>,
+    transfer_function_processor: Arc<Mutex<TransferFunctionProcessor>>,
+    generator: Arc<Mutex<Generator>>,
+    generator_active: Arc<AtomicBool>,
+    is_running: Arc<AtomicBool>,
+    stop_signal: Arc<AtomicBool>,
+    reference_buffer: Arc<Mutex<Vec<f32>>>,
+) {
+    // Set real-time priority for this audio thread
+    configure_audio_thread();
+
+    let config = CoreAudioConfig {
+        sample_rate: sample_rate as f64,
+        buffer_size,
+        channels: 1,
+    };
+
+    // Clone references for input callback
+    let tf_processor = Arc::clone(&transfer_function_processor);
+    let ref_buffer_for_input = Arc::clone(&reference_buffer);
+    let fft_proc_clone = Arc::clone(&fft_processor);
+
+    // Create input stream
+    let mut input_stream = match CoreAudioInputStream::new(
+        Some(input_device_id),
+        config.clone(),
+        move |data: &[f32]| {
+            // Process FFT for spectrum analyzer
+            let mut fft_proc = fft_proc_clone.lock();
+            fft_proc.process(data);
+
+            // Process transfer function if we have reference data
+            let ref_data: Vec<f32>;
+            {
+                let mut ref_buf = ref_buffer_for_input.lock();
+                if ref_buf.len() >= data.len() {
+                    ref_data = ref_buf.drain(..data.len()).collect();
+                } else {
+                    return;
+                }
+            }
+
+            let mut tf_proc = tf_processor.lock();
+            tf_proc.process(data, &ref_data);
+        },
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("Failed to create CoreAudio input stream: {}", e);
+            is_running.store(false, Ordering::Relaxed);
+            return;
+        }
+    };
+
+    // Clone references for output callback
+    let max_ref_buffer_size = buffer_size as usize * 4;
+
+    // Create output stream
+    let mut output_stream = match CoreAudioOutputStream::new(
+        Some(output_device_id),
+        config,
+        move |data: &mut [f32]| {
+            if generator_active.load(Ordering::Acquire) {
+                let mut gen = generator.lock();
+                let mut ref_samples = Vec::with_capacity(data.len());
+
+                for sample in data.iter_mut() {
+                    let s = gen.next_sample();
+                    *sample = s;
+                    ref_samples.push(s);
+                }
+
+                // Store reference samples
+                let mut ref_buf = reference_buffer.lock();
+                ref_buf.extend_from_slice(&ref_samples);
+                let buf_len = ref_buf.len();
+                if buf_len > max_ref_buffer_size {
+                    ref_buf.drain(..buf_len - max_ref_buffer_size);
+                }
+            } else {
+                for sample in data.iter_mut() {
+                    *sample = 0.0;
+                }
+            }
+        },
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("Failed to create CoreAudio output stream: {}", e);
+            is_running.store(false, Ordering::Relaxed);
+            return;
+        }
+    };
+
+    // Start streams
+    if let Err(e) = input_stream.start() {
+        log::error!("Failed to start CoreAudio input stream: {}", e);
+        is_running.store(false, Ordering::Relaxed);
+        return;
+    }
+
+    if let Err(e) = output_stream.start() {
+        log::error!("Failed to start CoreAudio output stream: {}", e);
+        let _ = input_stream.stop();
+        is_running.store(false, Ordering::Relaxed);
+        return;
+    }
+
+    log::info!("CoreAudio streams running");
+
+    // Keep thread alive until stop signal
+    while !stop_signal.load(Ordering::Relaxed) {
+        thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    // Stop streams
+    let _ = input_stream.stop();
+    let _ = output_stream.stop();
+
+    is_running.store(false, Ordering::Relaxed);
+    log::info!("CoreAudio streams stopped");
 }

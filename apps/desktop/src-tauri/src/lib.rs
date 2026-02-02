@@ -27,6 +27,7 @@ pub fn run() {
             // Audio device and stream commands
             commands::list_audio_devices,
             commands::get_audio_state,
+            commands::set_audio_backend,
             commands::start_audio_stream,
             commands::stop_audio_stream,
             commands::start_generator,

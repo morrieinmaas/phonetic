@@ -1,6 +1,8 @@
 use tauri::State;
 
-use crate::audio::{enumerate_devices, AudioDeviceList, AudioEngine, AudioState, SignalType};
+use crate::audio::{
+    enumerate_devices, AudioBackend, AudioDeviceList, AudioEngine, AudioState, SignalType,
+};
 use crate::dsp::{
     export_impulse_response_csv, export_impulse_response_json, export_impulse_response_txt,
     export_transfer_function_csv, export_transfer_function_json, export_transfer_function_txt,
@@ -55,6 +57,11 @@ pub fn list_audio_devices() -> AudioDeviceList {
 #[tauri::command]
 pub fn get_audio_state(engine: State<'_, AudioEngine>) -> AudioState {
     engine.get_state()
+}
+
+#[tauri::command]
+pub fn set_audio_backend(engine: State<'_, AudioEngine>, backend: AudioBackend) -> Result<(), String> {
+    engine.set_backend(backend)
 }
 
 #[tauri::command]

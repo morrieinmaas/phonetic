@@ -16,6 +16,9 @@ export interface AudioDeviceList {
 	default_output: string | null;
 }
 
+/** Audio backend type */
+export type AudioBackend = "cpal" | "coreaudio";
+
 /** Current audio engine state */
 export interface AudioState {
 	is_running: boolean;
@@ -25,6 +28,8 @@ export interface AudioState {
 	output_device: string | null;
 	generator_active: boolean;
 	generator_type: string | null;
+	backend: AudioBackend;
+	backend_available: AudioBackend[];
 }
 
 /** Signal generator types */

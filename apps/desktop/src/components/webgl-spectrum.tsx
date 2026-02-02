@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 interface WebGLSpectrumProps {
 	spectrumData: number[];
@@ -7,6 +7,24 @@ interface WebGLSpectrumProps {
 	isRunning: boolean;
 	showWaterfall?: boolean;
 }
+
+// Theme colors for WebGL rendering
+const THEME_COLORS = {
+	dark: {
+		background: [0.05, 0.05, 0.08] as const,
+		labelFill: "#e5e5e5",
+		gridStroke: "rgba(255,255,255,0.1)",
+		containerBg: "bg-[#0d0d12]",
+		peakHold: "#f59e0b",
+	},
+	light: {
+		background: [0.97, 0.97, 0.98] as const,
+		labelFill: "#171717",
+		gridStroke: "rgba(0,0,0,0.15)",
+		containerBg: "bg-[#f8f8fa]",
+		peakHold: "#d97706",
+	},
+};
 
 // Vertex shader - positions the spectrum bars
 const VERTEX_SHADER = `
@@ -119,19 +137,46 @@ export const WebGLSpectrum = ({
 	showWaterfall = false,
 }: WebGLSpectrumProps) => {
 	const canvasRef = useRef<HTMLCanvasElement>(null);
+	const peakCanvasRef = useRef<HTMLCanvasElement>(null);
 	const glRef = useRef<WebGLRenderingContext | null>(null);
 	const programRef = useRef<WebGLProgram | null>(null);
 	const positionBufferRef = useRef<WebGLBuffer | null>(null);
 	const waterfallTextureRef = useRef<WebGLTexture | null>(null);
 	const waterfallDataRef = useRef<Float32Array | null>(null);
-	// Used for waterfall scrolling (incremented but read when rendering waterfall)
+	const peakHoldRef = useRef<number[]>([]);
 	const waterfallRowRef = useRef(0);
-	// Suppress unused warning - will be used when waterfall rendering is implemented
 	void waterfallRowRef;
+
+	const [peakHoldEnabled, setPeakHoldEnabled] = useState(true);
+
+	// Theme detection
+	const [theme, setTheme] = useState<"dark" | "light">(() =>
+		document.documentElement.classList.contains("dark") ? "dark" : "light",
+	);
+
+	// Watch for theme changes
+	useEffect(() => {
+		const observer = new MutationObserver(() => {
+			setTheme(document.documentElement.classList.contains("dark") ? "dark" : "light");
+		});
+		observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+		return () => observer.disconnect();
+	}, []);
+
+	const themeColors = THEME_COLORS[theme];
 
 	const MIN_DB = -120;
 	const MAX_DB = 0;
 	const WATERFALL_ROWS = 256;
+
+	// Initialize peak hold array
+	useEffect(() => {
+		peakHoldRef.current = new Array(512).fill(-120);
+	}, []);
+
+	const clearPeakHold = () => {
+		peakHoldRef.current = new Array(512).fill(-120);
+	};
 
 	// Initialize WebGL
 	useEffect(() => {
@@ -172,8 +217,9 @@ export const WebGLSpectrum = ({
 			waterfallDataRef.current = new Float32Array(512 * WATERFALL_ROWS);
 		}
 
-		// Set clear color (dark background)
-		gl.clearColor(0.05, 0.05, 0.08, 1.0);
+		// Set initial clear color
+		const [r, g, b] = THEME_COLORS.dark.background;
+		gl.clearColor(r, g, b, 1.0);
 
 		// Enable blending for smooth lines
 		gl.enable(gl.BLEND);
@@ -191,6 +237,7 @@ export const WebGLSpectrum = ({
 	// Render spectrum
 	const renderSpectrum = useCallback(() => {
 		const canvas = canvasRef.current;
+		const peakCanvas = peakCanvasRef.current;
 		const gl = glRef.current;
 		const program = programRef.current;
 
@@ -198,6 +245,10 @@ export const WebGLSpectrum = ({
 
 		const width = canvas.width;
 		const height = canvas.height;
+
+		// Update clear color for current theme
+		const [r, g, b] = themeColors.background;
+		gl.clearColor(r, g, b, 1.0);
 
 		gl.viewport(0, 0, width, height);
 		gl.clear(gl.COLOR_BUFFER_BIT);
@@ -216,14 +267,15 @@ export const WebGLSpectrum = ({
 		gl.uniform1f(maxDbLoc, MAX_DB);
 
 		// Spectrum colors (purple gradient)
-		gl.uniform3f(colorLowLoc, 0.2, 0.1, 0.3); // Dark purple
-		gl.uniform3f(colorMidLoc, 0.5, 0.2, 0.8); // Medium purple
-		gl.uniform3f(colorHighLoc, 0.9, 0.4, 1.0); // Bright purple/pink
+		gl.uniform3f(colorLowLoc, 0.2, 0.1, 0.3);
+		gl.uniform3f(colorMidLoc, 0.5, 0.2, 0.8);
+		gl.uniform3f(colorHighLoc, 0.9, 0.4, 1.0);
 
 		// Build vertex data for spectrum bars
 		const binWidth = sampleRate / fftSize;
 		const vertices: number[] = [];
 		const magnitudes: number[] = [];
+		const logDbValues: number[] = [];
 
 		// Log frequency points for smooth curve
 		const numPoints = 512;
@@ -233,7 +285,6 @@ export const WebGLSpectrum = ({
 			const freq = logFreqs[i];
 			const nextFreq = logFreqs[i + 1];
 
-			// Skip if frequencies are undefined (shouldn't happen with our array)
 			if (freq === undefined || nextFreq === undefined) continue;
 
 			// Find corresponding FFT bin
@@ -253,22 +304,33 @@ export const WebGLSpectrum = ({
 				}
 			}
 			const db = count > 0 ? sum / count : MIN_DB;
+			logDbValues.push(db);
 
 			const x1 = freqToX(freq, width);
 			const x2 = freqToX(nextFreq, width);
-			const y1 = height; // Bottom
+			const y1 = height;
 			const y2 = dbToY(db, height, MIN_DB, MAX_DB);
 
 			// Create a filled rectangle (two triangles)
-			// Triangle 1
 			vertices.push(x1, y1, x1, y2, x2, y2);
-			// Triangle 2
 			vertices.push(x1, y1, x2, y2, x2, y1);
 
-			// All vertices get same magnitude for coloring
 			const normalizedMag = db;
 			for (let j = 0; j < 6; j++) {
 				magnitudes.push(normalizedMag);
+			}
+		}
+
+		// Update peak hold
+		if (peakHoldEnabled) {
+			for (let i = 0; i < logDbValues.length; i++) {
+				const currentPeak = peakHoldRef.current[i] ?? -120;
+				const currentValue = logDbValues[i] ?? -120;
+				if (currentValue > currentPeak) {
+					peakHoldRef.current[i] = currentValue;
+				} else {
+					peakHoldRef.current[i] = Math.max(currentPeak - 0.5, currentValue);
+				}
 			}
 		}
 
@@ -276,38 +338,57 @@ export const WebGLSpectrum = ({
 		const positionLoc = gl.getAttribLocation(program, "a_position");
 		const magnitudeLoc = gl.getAttribLocation(program, "a_magnitude");
 
-		// Position buffer
 		gl.bindBuffer(gl.ARRAY_BUFFER, positionBufferRef.current);
 		gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.DYNAMIC_DRAW);
 		gl.enableVertexAttribArray(positionLoc);
 		gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, 0, 0);
 
-		// Magnitude buffer (create temporary)
 		const magBuffer = gl.createBuffer();
 		gl.bindBuffer(gl.ARRAY_BUFFER, magBuffer);
 		gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(magnitudes), gl.DYNAMIC_DRAW);
 		gl.enableVertexAttribArray(magnitudeLoc);
 		gl.vertexAttribPointer(magnitudeLoc, 1, gl.FLOAT, false, 0, 0);
 
-		// Draw
 		gl.drawArrays(gl.TRIANGLES, 0, vertices.length / 2);
-
-		// Cleanup
 		gl.deleteBuffer(magBuffer);
 
-		// Draw grid lines (simple lines overlay)
-		drawGrid(gl, width, height);
-	}, [spectrumData, sampleRate, fftSize]);
+		// Draw peak hold line on 2D canvas overlay
+		if (peakCanvas && peakHoldEnabled) {
+			const ctx = peakCanvas.getContext("2d");
+			if (ctx) {
+				ctx.clearRect(0, 0, peakCanvas.width, peakCanvas.height);
+				ctx.strokeStyle = themeColors.peakHold;
+				ctx.lineWidth = 2 * window.devicePixelRatio;
+				ctx.setLineDash([4 * window.devicePixelRatio, 2 * window.devicePixelRatio]);
+				ctx.beginPath();
 
-	// Draw grid lines (uses SVG overlay instead of WebGL for simplicity)
-	const drawGrid = (_gl: WebGLRenderingContext, _width: number, _height: number) => {
-		// Grid rendering is handled by the SVG overlay below
-		// A WebGL implementation would require a separate shader program
-	};
+				for (let i = 0; i < numPoints - 1; i++) {
+					const freq = logFreqs[i];
+					if (freq === undefined) continue;
+
+					const x = freqToX(freq, width);
+					const y = dbToY(peakHoldRef.current[i] ?? -120, height, MIN_DB, MAX_DB);
+
+					if (i === 0) {
+						ctx.moveTo(x, y);
+					} else {
+						ctx.lineTo(x, y);
+					}
+				}
+				ctx.stroke();
+			}
+		} else if (peakCanvas) {
+			const ctx = peakCanvas.getContext("2d");
+			if (ctx) {
+				ctx.clearRect(0, 0, peakCanvas.width, peakCanvas.height);
+			}
+		}
+	}, [spectrumData, sampleRate, fftSize, themeColors, peakHoldEnabled]);
 
 	// Handle resize
 	useEffect(() => {
 		const canvas = canvasRef.current;
+		const peakCanvas = peakCanvasRef.current;
 		if (!canvas) return;
 
 		const resizeObserver = new ResizeObserver((entries) => {
@@ -317,6 +398,12 @@ export const WebGLSpectrum = ({
 				canvas.height = height * window.devicePixelRatio;
 				canvas.style.width = `${width}px`;
 				canvas.style.height = `${height}px`;
+				if (peakCanvas) {
+					peakCanvas.width = width * window.devicePixelRatio;
+					peakCanvas.height = height * window.devicePixelRatio;
+					peakCanvas.style.width = `${width}px`;
+					peakCanvas.style.height = `${height}px`;
+				}
 			}
 		});
 
@@ -337,12 +424,38 @@ export const WebGLSpectrum = ({
 				<h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
 					Spectrum Analyzer (WebGL)
 				</h2>
-				<span className="text-xs text-muted-foreground px-2 py-0.5 rounded bg-green-500/10 text-green-500">
-					GPU Accelerated
-				</span>
+				<div className="flex items-center gap-2">
+					<button
+						type="button"
+						onClick={() => {
+							setPeakHoldEnabled(!peakHoldEnabled);
+							if (peakHoldEnabled) clearPeakHold();
+						}}
+						className={`px-2 py-1 text-xs rounded border transition-colors ${
+							peakHoldEnabled
+								? "border-primary bg-primary/10 text-primary"
+								: "border-border hover:bg-accent"
+						}`}
+					>
+						Peak Hold
+					</button>
+					{peakHoldEnabled && (
+						<button
+							type="button"
+							onClick={clearPeakHold}
+							className="px-2 py-1 text-xs rounded border border-border hover:bg-accent"
+						>
+							Clear
+						</button>
+					)}
+					<span className="text-xs text-muted-foreground px-2 py-0.5 rounded bg-green-500/10 text-green-500">
+						GPU
+					</span>
+				</div>
 			</div>
-			<div className="flex-1 min-h-[280px] relative rounded-lg overflow-hidden bg-[#0d0d12]">
+			<div className={`flex-1 min-h-[280px] relative rounded-lg overflow-hidden ${themeColors.containerBg}`}>
 				<canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
+				<canvas ref={peakCanvasRef} className="absolute inset-0 w-full h-full pointer-events-none" />
 				{/* Grid overlay using SVG */}
 				<svg
 					className="absolute inset-0 w-full h-full pointer-events-none"
@@ -357,44 +470,44 @@ export const WebGLSpectrum = ({
 								y1="50"
 								x2="100"
 								y2="50"
-								stroke="rgba(255,255,255,0.1)"
+								stroke={themeColors.gridStroke}
 								strokeWidth="0.5"
 							/>
 						</pattern>
 					</defs>
 					{/* Frequency labels */}
-					<text x="5%" y="98%" fill="rgba(255,255,255,0.5)" fontSize="10">
+					<text x="5%" y="96%" fill={themeColors.labelFill} fontSize="12" fontWeight="bold">
 						20
 					</text>
-					<text x="20%" y="98%" fill="rgba(255,255,255,0.5)" fontSize="10">
+					<text x="20%" y="96%" fill={themeColors.labelFill} fontSize="12" fontWeight="bold">
 						100
 					</text>
-					<text x="40%" y="98%" fill="rgba(255,255,255,0.5)" fontSize="10">
+					<text x="40%" y="96%" fill={themeColors.labelFill} fontSize="12" fontWeight="bold">
 						1k
 					</text>
-					<text x="60%" y="98%" fill="rgba(255,255,255,0.5)" fontSize="10">
+					<text x="60%" y="96%" fill={themeColors.labelFill} fontSize="12" fontWeight="bold">
 						5k
 					</text>
-					<text x="80%" y="98%" fill="rgba(255,255,255,0.5)" fontSize="10">
+					<text x="80%" y="96%" fill={themeColors.labelFill} fontSize="12" fontWeight="bold">
 						10k
 					</text>
-					<text x="95%" y="98%" fill="rgba(255,255,255,0.5)" fontSize="10">
+					<text x="95%" y="96%" fill={themeColors.labelFill} fontSize="12" fontWeight="bold">
 						20k
 					</text>
 					{/* dB labels */}
-					<text x="1%" y="5%" fill="rgba(255,255,255,0.5)" fontSize="10">
+					<text x="2%" y="8%" fill={themeColors.labelFill} fontSize="12" fontWeight="bold">
 						0dB
 					</text>
-					<text x="1%" y="30%" fill="rgba(255,255,255,0.5)" fontSize="10">
+					<text x="2%" y="30%" fill={themeColors.labelFill} fontSize="12" fontWeight="bold">
 						-30
 					</text>
-					<text x="1%" y="55%" fill="rgba(255,255,255,0.5)" fontSize="10">
+					<text x="2%" y="55%" fill={themeColors.labelFill} fontSize="12" fontWeight="bold">
 						-60
 					</text>
-					<text x="1%" y="80%" fill="rgba(255,255,255,0.5)" fontSize="10">
+					<text x="2%" y="80%" fill={themeColors.labelFill} fontSize="12" fontWeight="bold">
 						-90
 					</text>
-					<text x="1%" y="97%" fill="rgba(255,255,255,0.5)" fontSize="10">
+					<text x="2%" y="95%" fill={themeColors.labelFill} fontSize="12" fontWeight="bold">
 						-120
 					</text>
 				</svg>
@@ -402,6 +515,21 @@ export const WebGLSpectrum = ({
 					<div className="absolute inset-0 flex items-center justify-center text-muted-foreground bg-background/50 z-10">
 						Start audio stream to see spectrum
 					</div>
+				)}
+			</div>
+			<div className="flex gap-4 mt-2 text-xs text-muted-foreground flex-shrink-0">
+				<span className="flex items-center gap-1">
+					<span className="w-4 h-0.5 bg-[oklch(0.7_0.15_280)]" />
+					Magnitude
+				</span>
+				{peakHoldEnabled && (
+					<span className="flex items-center gap-1">
+						<span
+							className="w-4 h-0.5 bg-amber-500"
+							style={{ borderTopWidth: 1, borderStyle: "dashed" }}
+						/>
+						Peak Hold
+					</span>
 				)}
 			</div>
 		</div>

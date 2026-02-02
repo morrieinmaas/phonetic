@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AudioDevice, AudioDeviceList, AudioState, SignalType } from "../types/audio";
+import type { AudioBackend, AudioDevice, AudioDeviceList, AudioState, SignalType } from "../types/audio";
 
 /** Transfer function measurement data */
 export interface TransferFunctionData {
@@ -114,6 +114,12 @@ export const audioApi = {
 		validateFftSize(size);
 		return invoke("set_fft_size", { size });
 	},
+
+	/**
+	 * Set audio backend (requires stream to be stopped)
+	 * @param backend - Backend to use ("cpal" or "coreaudio")
+	 */
+	setAudioBackend: (backend: AudioBackend): Promise<void> => invoke("set_audio_backend", { backend }),
 };
 
-export type { AudioDevice, AudioDeviceList, AudioState, SignalType };
+export type { AudioBackend, AudioDevice, AudioDeviceList, AudioState, SignalType };

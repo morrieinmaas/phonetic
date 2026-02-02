@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import type { TransferFunctionData } from "../services/audio-api";
@@ -47,6 +47,30 @@ const generateLogFrequencies = (minFreq: number, maxFreq: number, numPoints: num
 	return Array.from({ length: numPoints }, (_, i) => 10 ** (logMin + i * step));
 };
 
+// Calculate nice round scale bounds with padding
+const calculateScaleBounds = (data: number[], padding = 0.1): [number, number] => {
+	const validData = data.filter((v) => Number.isFinite(v) && v > -120);
+	if (validData.length === 0) return [-40, 20];
+
+	const min = Math.min(...validData);
+	const max = Math.max(...validData);
+	const range = max - min || 10;
+	const paddedMin = min - range * padding;
+	const paddedMax = max + range * padding;
+
+	// Round to nice values (multiples of 5 or 10)
+	const roundToNice = (val: number, roundUp: boolean): number => {
+		const absVal = Math.abs(val);
+		const magnitude = absVal < 10 ? 5 : 10;
+		const rounded = roundUp
+			? Math.ceil(val / magnitude) * magnitude
+			: Math.floor(val / magnitude) * magnitude;
+		return rounded;
+	};
+
+	return [roundToNice(paddedMin, false), roundToNice(paddedMax, true)];
+};
+
 export const TransferFunctionDisplay = ({
 	data,
 	isRunning,
@@ -55,13 +79,26 @@ export const TransferFunctionDisplay = ({
 	const containerRef = useRef<HTMLDivElement>(null);
 	const chartRef = useRef<uPlot | null>(null);
 	const logFreqsRef = useRef<number[]>([]);
+	const [autoZoom, setAutoZoom] = useState(true);
+	const [theme, setTheme] = useState<"dark" | "light">(() =>
+		document.documentElement.classList.contains("dark") ? "dark" : "light",
+	);
+
+	// Watch for theme changes
+	useEffect(() => {
+		const observer = new MutationObserver(() => {
+			setTheme(document.documentElement.classList.contains("dark") ? "dark" : "light");
+		});
+		observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+		return () => observer.disconnect();
+	}, []);
 
 	// Initialize log frequencies
 	useEffect(() => {
 		logFreqsRef.current = generateLogFrequencies(20, 20000, 512);
 	}, []);
 
-	// Create chart
+	// Create chart (recreate when theme changes)
 	useEffect(() => {
 		if (!containerRef.current) return;
 
@@ -69,10 +106,16 @@ export const TransferFunctionDisplay = ({
 		const width = container.clientWidth || 600;
 		const height = Math.max(container.clientHeight, 250);
 
+		// Theme-specific colors with high contrast
+		const isDark = theme === "dark";
+		const labelColor = isDark ? "#f5f5f5" : "#171717";
+		const gridColor = isDark ? "rgba(255,255,255,0.2)" : "rgba(0,0,0,0.2)";
+		const tickColor = isDark ? "rgba(255,255,255,0.4)" : "rgba(0,0,0,0.4)";
+
 		const opts: uPlot.Options = {
 			width,
 			height,
-			padding: [10, 20, 0, 0], // top, right, bottom, left
+			padding: [10, 20, 0, 0],
 			cursor: {
 				show: true,
 				x: true,
@@ -81,63 +124,61 @@ export const TransferFunctionDisplay = ({
 			scales: {
 				x: {
 					time: false,
-					distr: 2, // Logarithmic scale
+					distr: 2,
 					log: 10,
 					min: 20,
 					max: 20000,
 				},
 				magnitude: {
-					auto: false, // Force fixed range - never auto-scale
+					auto: false,
 					range: [-40, 20],
 				},
 				phase: {
-					auto: false, // Force fixed range - never auto-scale
+					auto: false,
 					range: [-180, 180],
 				},
 			},
 			axes: [
 				{
 					label: "Frequency (Hz)",
-					labelSize: 20,
-					labelFont: "11px system-ui, sans-serif",
-					font: "10px system-ui, sans-serif",
-					stroke: "var(--color-muted-foreground)",
-					grid: { stroke: "var(--color-border)", width: 1 },
-					ticks: { stroke: "var(--color-border)", width: 1, size: 5 },
-					size: 40,
-					gap: 5,
+					labelSize: 24,
+					labelFont: "bold 13px system-ui, sans-serif",
+					font: "bold 12px system-ui, sans-serif",
+					stroke: labelColor,
+					grid: { stroke: gridColor, width: 1 },
+					ticks: { stroke: tickColor, width: 1, size: 6 },
+					size: 45,
+					gap: 8,
 					splits: [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000],
 					values: (_, ticks) =>
 						ticks.map((v) => {
-							if (v >= 10000) return `${(v / 1000).toFixed(0)}k`;
 							if (v >= 1000) return `${(v / 1000).toFixed(0)}k`;
 							return String(Math.round(v));
 						}),
 				},
 				{
 					label: "Magnitude (dB)",
-					labelSize: 15,
-					labelFont: "11px system-ui, sans-serif",
-					font: "10px system-ui, sans-serif",
-					stroke: "var(--color-muted-foreground)",
-					grid: { stroke: "var(--color-border)", width: 1 },
-					ticks: { stroke: "var(--color-border)", width: 1, size: 5 },
-					size: 50,
-					gap: 5,
+					labelSize: 20,
+					labelFont: "bold 13px system-ui, sans-serif",
+					font: "bold 12px system-ui, sans-serif",
+					stroke: labelColor,
+					grid: { stroke: gridColor, width: 1 },
+					ticks: { stroke: tickColor, width: 1, size: 6 },
+					size: 55,
+					gap: 8,
 					scale: "magnitude",
-					splits: [-40, -30, -20, -10, 0, 10, 20],
 				},
 				{
 					side: 1,
 					label: "Phase (°)",
-					labelSize: 15,
-					labelFont: "11px system-ui, sans-serif",
-					font: "10px system-ui, sans-serif",
-					stroke: "var(--color-muted-foreground)",
+					labelSize: 20,
+					labelFont: "bold 13px system-ui, sans-serif",
+					font: "bold 12px system-ui, sans-serif",
+					stroke: labelColor,
 					grid: { show: false },
-					ticks: { stroke: "var(--color-border)", width: 1, size: 5 },
-					size: 50,
-					gap: 5,
+					ticks: { stroke: tickColor, width: 1, size: 6 },
+					size: 55,
+					gap: 8,
 					scale: "phase",
 					splits: [-180, -90, 0, 90, 180],
 				},
@@ -146,14 +187,14 @@ export const TransferFunctionDisplay = ({
 				{},
 				{
 					label: "Magnitude",
-					stroke: "oklch(0.7 0.15 280)", // Primary/violet
+					stroke: isDark ? "oklch(0.75 0.18 280)" : "oklch(0.55 0.2 280)",
 					width: 2,
 					scale: "magnitude",
 				},
 				{
 					label: "Phase",
-					stroke: "oklch(0.7 0.15 200)", // Cyan
-					width: 1,
+					stroke: isDark ? "oklch(0.75 0.18 200)" : "oklch(0.55 0.2 200)",
+					width: 1.5,
 					scale: "phase",
 					dash: [4, 2],
 				},
@@ -161,13 +202,13 @@ export const TransferFunctionDisplay = ({
 		};
 
 		// Initial empty data
-		const data: uPlot.AlignedData = [
+		const chartData: uPlot.AlignedData = [
 			logFreqsRef.current,
-			new Array(512).fill(0), // Magnitude
-			new Array(512).fill(0), // Phase
+			new Array(512).fill(0),
+			new Array(512).fill(0),
 		];
 
-		chartRef.current = new uPlot(opts, data, container);
+		chartRef.current = new uPlot(opts, chartData, container);
 
 		// Handle resize
 		const resizeObserver = new ResizeObserver((entries) => {
@@ -188,7 +229,7 @@ export const TransferFunctionDisplay = ({
 			chartRef.current?.destroy();
 			chartRef.current = null;
 		};
-	}, []);
+	}, [theme]);
 
 	// Update chart data
 	const updateChart = useCallback(() => {
@@ -197,8 +238,22 @@ export const TransferFunctionDisplay = ({
 		const logMagnitude = mapToLogScale(data.magnitude_db, data.frequencies, logFreqsRef.current);
 		const logPhase = mapToLogScale(data.phase_deg, data.frequencies, logFreqsRef.current);
 
+		// Auto-zoom: calculate appropriate scale bounds
+		const magnitudeScale = chartRef.current.scales.magnitude;
+		if (magnitudeScale) {
+			if (autoZoom) {
+				const [magMin, magMax] = calculateScaleBounds(logMagnitude);
+				magnitudeScale.min = magMin;
+				magnitudeScale.max = magMax;
+			} else {
+				// Fixed scale
+				magnitudeScale.min = -40;
+				magnitudeScale.max = 20;
+			}
+		}
+
 		chartRef.current.setData([logFreqsRef.current, logMagnitude, logPhase]);
-	}, [data, isRunning]);
+	}, [data, isRunning, autoZoom]);
 
 	useEffect(() => {
 		updateChart();
@@ -235,6 +290,17 @@ export const TransferFunctionDisplay = ({
 							</div>
 						</div>
 					)}
+					<button
+						type="button"
+						onClick={() => setAutoZoom(!autoZoom)}
+						className={`px-2 py-1 text-xs rounded border transition-colors ${
+							autoZoom
+								? "border-primary bg-primary/10 text-primary"
+								: "border-border hover:bg-accent"
+						}`}
+					>
+						Auto Zoom
+					</button>
 					<button
 						type="button"
 						onClick={onResetAveraging}

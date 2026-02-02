@@ -201,4 +201,89 @@ mod tests {
         apply_flat_top_window(&mut empty);
         assert!(empty.is_empty());
     }
+
+    #[test]
+    fn test_hann_window_power_of_two_sizes() {
+        for size in [32, 64, 128, 256, 512, 1024] {
+            let mut buffer = vec![1.0; size];
+            apply_hann_window(&mut buffer);
+            assert!(buffer[0] < 0.01, "Size {} start should be near zero", size);
+            assert!(buffer[size / 2] > 0.99, "Size {} center should be near 1.0", size);
+        }
+    }
+
+    #[test]
+    fn test_blackman_harris_symmetry() {
+        let mut buffer = vec![1.0; 256];
+        apply_blackman_harris_window(&mut buffer);
+
+        for i in 0..buffer.len() / 2 {
+            let diff = (buffer[i] - buffer[buffer.len() - 1 - i]).abs();
+            assert!(diff < 0.0001, "Blackman-Harris should be symmetric");
+        }
+    }
+
+    #[test]
+    fn test_hamming_symmetry() {
+        let mut buffer = vec![1.0; 256];
+        apply_hamming_window(&mut buffer);
+
+        for i in 0..buffer.len() / 2 {
+            let diff = (buffer[i] - buffer[buffer.len() - 1 - i]).abs();
+            assert!(diff < 0.0001, "Hamming should be symmetric");
+        }
+    }
+
+    #[test]
+    fn test_flat_top_symmetry() {
+        let mut buffer = vec![1.0; 256];
+        apply_flat_top_window(&mut buffer);
+
+        for i in 0..buffer.len() / 2 {
+            let diff = (buffer[i] - buffer[buffer.len() - 1 - i]).abs();
+            assert!(diff < 0.0001, "Flat-top should be symmetric");
+        }
+    }
+
+    #[test]
+    fn test_window_two_samples() {
+        let mut hann = vec![1.0; 2];
+        apply_hann_window(&mut hann);
+        assert!(hann[0] < 0.01 && hann[1] < 0.01, "Two-sample Hann endpoints near zero");
+
+        let mut hamming = vec![1.0; 2];
+        apply_hamming_window(&mut hamming);
+        assert!(hamming[0] > 0.07, "Two-sample Hamming has raised endpoints");
+    }
+
+    #[test]
+    fn test_window_preserves_sign() {
+        let mut buffer = vec![-1.0; 128];
+        apply_hann_window(&mut buffer);
+
+        // All non-zero values should be negative (since input was negative)
+        for &v in buffer.iter() {
+            assert!(v <= 0.0, "Window should preserve sign");
+        }
+    }
+
+    #[test]
+    fn test_window_large_buffer() {
+        let mut buffer = vec![1.0; 16384];
+        apply_hann_window(&mut buffer);
+
+        assert!(buffer[0] < 0.001);
+        assert!(buffer[8192] > 0.99);
+        assert!(buffer[16383] < 0.001);
+    }
+
+    #[test]
+    fn test_window_odd_size() {
+        let mut buffer = vec![1.0; 127]; // Odd size
+        apply_hann_window(&mut buffer);
+
+        // Should not panic and should be reasonably symmetric
+        assert!(buffer[0] < 0.01);
+        assert!(buffer[63] > 0.99); // Center
+    }
 }

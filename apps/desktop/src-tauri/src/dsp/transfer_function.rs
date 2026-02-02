@@ -524,4 +524,138 @@ mod tests {
             actual_nyquist
         );
     }
+
+    #[test]
+    fn test_multiple_processing_calls() {
+        let mut processor = TransferFunctionProcessor::new(FFT_SIZE, SAMPLE_RATE);
+        let signal = create_sine_wave(1000.0, SAMPLE_RATE, FFT_SIZE * 2, 0.5);
+
+        // Process multiple times for averaging
+        for _ in 0..10 {
+            processor.process(&signal, &signal);
+        }
+
+        assert!(processor.average_count() > 1, "Should have accumulated averages");
+
+        let data = processor.get_data();
+        let bin_1k = (1000.0 / SAMPLE_RATE * FFT_SIZE as f32).round() as usize;
+        assert!(
+            data.coherence[bin_1k] > 0.95,
+            "Coherence should improve with averaging"
+        );
+    }
+
+    #[test]
+    fn test_sample_rate_change() {
+        let mut processor = TransferFunctionProcessor::new(FFT_SIZE, 48000.0);
+        processor.set_sample_rate(96000.0);
+
+        let data = processor.get_data();
+        let expected_nyquist = 48000.0; // 96000 / 2
+        let actual_nyquist = data.frequencies[data.frequencies.len() - 1];
+        assert!(
+            (actual_nyquist - expected_nyquist).abs() < 1.0,
+            "Nyquist should update with sample rate"
+        );
+    }
+
+    #[test]
+    fn test_silence_input() {
+        let mut processor = TransferFunctionProcessor::new(FFT_SIZE, SAMPLE_RATE);
+        let reference = create_sine_wave(1000.0, SAMPLE_RATE, FFT_SIZE * 4, 0.5);
+        let silence = vec![0.0; FFT_SIZE * 4];
+
+        processor.process(&silence, &reference);
+
+        let data = processor.get_data();
+        // Magnitude should be very low
+        assert!(
+            data.magnitude_db.iter().all(|&v| v < -60.0),
+            "Silent input should produce low magnitude"
+        );
+    }
+
+    #[test]
+    fn test_inverted_polarity() {
+        let mut processor = TransferFunctionProcessor::new(FFT_SIZE, SAMPLE_RATE);
+
+        let reference = create_sine_wave(1000.0, SAMPLE_RATE, FFT_SIZE * 4, 0.5);
+        let inverted: Vec<f32> = reference.iter().map(|&x| -x).collect();
+
+        processor.process(&inverted, &reference);
+
+        let data = processor.get_data();
+        let bin_1k = (1000.0 / SAMPLE_RATE * FFT_SIZE as f32).round() as usize;
+
+        // Phase should be near 180 degrees (or -180)
+        assert!(
+            (data.phase_deg[bin_1k].abs() - 180.0).abs() < 10.0,
+            "Inverted signal should have ~180° phase, got {}",
+            data.phase_deg[bin_1k]
+        );
+    }
+
+    #[test]
+    fn test_broadband_signal() {
+        let mut processor = TransferFunctionProcessor::new(FFT_SIZE, SAMPLE_RATE);
+
+        // White noise-like signal (pseudo-random)
+        let mut signal = Vec::with_capacity(FFT_SIZE * 4);
+        let mut x = 0.5f32;
+        for _ in 0..(FFT_SIZE * 4) {
+            x = (x * 1103515245.0 + 12345.0) % 2147483648.0 / 2147483648.0;
+            signal.push(x * 2.0 - 1.0);
+        }
+
+        processor.process(&signal, &signal);
+
+        let data = processor.get_data();
+        // Unity transfer function for identical signals
+        let avg_magnitude: f32 = data.magnitude_db.iter().sum::<f32>() / data.magnitude_db.len() as f32;
+        assert!(
+            avg_magnitude.abs() < 10.0,
+            "Broadband unity should be near 0dB average"
+        );
+    }
+
+    #[test]
+    fn test_small_fft_size() {
+        let processor = TransferFunctionProcessor::new(256, SAMPLE_RATE);
+        assert_eq!(processor.fft_size(), 256);
+        assert_eq!(processor.bin_count(), 129);
+    }
+
+    #[test]
+    fn test_large_fft_size() {
+        let processor = TransferFunctionProcessor::new(16384, SAMPLE_RATE);
+        assert_eq!(processor.fft_size(), 16384);
+        assert_eq!(processor.bin_count(), 8193);
+    }
+
+    #[test]
+    fn test_magnitude_db_range() {
+        let mut processor = TransferFunctionProcessor::new(FFT_SIZE, SAMPLE_RATE);
+        let signal = create_sine_wave(1000.0, SAMPLE_RATE, FFT_SIZE * 4, 0.5);
+
+        processor.process(&signal, &signal);
+
+        let data = processor.get_data();
+        for &mag in &data.magnitude_db {
+            assert!(mag.is_finite(), "Magnitude should be finite");
+            assert!(mag <= 20.0, "Magnitude should not exceed reasonable max");
+        }
+    }
+
+    #[test]
+    fn test_coherence_range() {
+        let mut processor = TransferFunctionProcessor::new(FFT_SIZE, SAMPLE_RATE);
+        let signal = create_sine_wave(1000.0, SAMPLE_RATE, FFT_SIZE * 4, 0.5);
+
+        processor.process(&signal, &signal);
+
+        let data = processor.get_data();
+        for &coh in &data.coherence {
+            assert!(coh >= 0.0 && coh <= 1.0, "Coherence must be in [0, 1]");
+        }
+    }
 }

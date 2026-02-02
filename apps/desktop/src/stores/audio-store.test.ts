@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, mock } from "bun:test";
 
 // Mock Tauri's invoke function
-const mockInvoke = mock(() => Promise.resolve({}));
+const mockInvoke = mock(() => Promise.resolve({} as unknown));
 
 mock.module("@tauri-apps/api/core", () => ({
 	invoke: mockInvoke,
@@ -203,8 +203,9 @@ describe("useAudioStore", () => {
 
 			await useAudioStore.getState().startGenerator();
 
+			// Note: Tauri automatically converts camelCase to snake_case
 			expect(mockInvoke).toHaveBeenCalledWith("start_generator", {
-				signal_type: "sine",
+				signalType: "sine",
 				frequency: 1000,
 				amplitude: 0.5,
 			});

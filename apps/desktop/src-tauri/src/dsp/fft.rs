@@ -200,4 +200,151 @@ mod tests {
         let magnitude = processor.get_magnitude_db();
         assert!(!magnitude.is_empty());
     }
+
+    #[test]
+    fn test_fft_multiple_frequencies() {
+        let mut processor = FftProcessor::new(2048);
+        let sample_rate = 48000.0;
+        let freq1 = 440.0; // A4
+        let freq2 = 880.0; // A5
+
+        // Generate two sine waves
+        let samples: Vec<f32> = (0..4096)
+            .map(|i| {
+                let t = i as f32 / sample_rate;
+                0.5 * (2.0 * PI * freq1 * t).sin() + 0.5 * (2.0 * PI * freq2 * t).sin()
+            })
+            .collect();
+
+        processor.process(&samples);
+        let magnitude = processor.get_magnitude_db();
+
+        // Both frequencies should produce peaks
+        let bin1 = (freq1 / sample_rate * 2048.0).round() as usize;
+        let bin2 = (freq2 / sample_rate * 2048.0).round() as usize;
+
+        // Check that both bins have significant energy (above -60dB)
+        assert!(magnitude[bin1] > -60.0, "Bin {} should have significant energy", bin1);
+        assert!(magnitude[bin2] > -60.0, "Bin {} should have significant energy", bin2);
+    }
+
+    #[test]
+    fn test_fft_dc_offset() {
+        let mut processor = FftProcessor::new(1024);
+
+        // Signal with DC offset
+        let samples: Vec<f32> = vec![0.5; 2048];
+
+        processor.process(&samples);
+        let magnitude = processor.get_magnitude_db();
+
+        // DC component (bin 0) should be the highest
+        let max_bin = magnitude
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .map(|(i, _)| i)
+            .unwrap();
+
+        assert_eq!(max_bin, 0, "DC offset should produce peak at bin 0");
+    }
+
+    #[test]
+    fn test_fft_high_frequency() {
+        let mut processor = FftProcessor::new(1024);
+        let sample_rate = 48000.0;
+        let frequency = 20000.0; // Near Nyquist
+
+        let samples: Vec<f32> = (0..2048)
+            .map(|i| (2.0 * PI * frequency * i as f32 / sample_rate).sin())
+            .collect();
+
+        processor.process(&samples);
+        let magnitude = processor.get_magnitude_db();
+
+        // Should have peak near the expected bin
+        let expected_bin = (frequency / sample_rate * 1024.0).round() as usize;
+        let (max_bin, _) = magnitude
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .unwrap();
+
+        assert!(
+            (max_bin as i32 - expected_bin as i32).abs() <= 3,
+            "High frequency peak at bin {}, expected {}",
+            max_bin,
+            expected_bin
+        );
+    }
+
+    #[test]
+    fn test_fft_low_amplitude() {
+        let mut processor = FftProcessor::new(1024);
+        let sample_rate = 48000.0;
+        let frequency = 1000.0;
+        let amplitude = 0.001; // Very low amplitude
+
+        let samples: Vec<f32> = (0..2048)
+            .map(|i| amplitude * (2.0 * PI * frequency * i as f32 / sample_rate).sin())
+            .collect();
+
+        processor.process(&samples);
+        let magnitude = processor.get_magnitude_db();
+
+        // Should still detect the frequency even at low amplitude
+        let expected_bin = (frequency / sample_rate * 1024.0).round() as usize;
+        let (max_bin, _) = magnitude
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .unwrap();
+
+        assert!(
+            (max_bin as i32 - expected_bin as i32).abs() <= 2,
+            "Low amplitude signal peak at bin {}, expected {}",
+            max_bin,
+            expected_bin
+        );
+    }
+
+    #[test]
+    fn test_fft_impulse_response() {
+        let mut processor = FftProcessor::new(1024);
+
+        // Single impulse
+        let mut samples = vec![0.0; 2048];
+        samples[0] = 1.0;
+
+        processor.process(&samples);
+        let magnitude = processor.get_magnitude_db();
+
+        // Impulse should have flat spectrum
+        let avg: f32 = magnitude.iter().sum::<f32>() / magnitude.len() as f32;
+        let variance: f32 = magnitude.iter().map(|&x| (x - avg).powi(2)).sum::<f32>() / magnitude.len() as f32;
+
+        // Variance should be relatively low for flat spectrum
+        assert!(variance < 100.0, "Impulse spectrum should be relatively flat");
+    }
+
+    #[test]
+    fn test_fft_set_size_same() {
+        let mut processor = FftProcessor::new(1024);
+        processor.set_fft_size(1024); // Same size
+        assert_eq!(processor.fft_size(), 1024);
+    }
+
+    #[test]
+    fn test_fft_smallest_valid_size() {
+        let processor = FftProcessor::new(64);
+        assert_eq!(processor.fft_size(), 64);
+        assert_eq!(processor.bin_count(), 33);
+    }
+
+    #[test]
+    fn test_fft_largest_practical_size() {
+        let processor = FftProcessor::new(16384);
+        assert_eq!(processor.fft_size(), 16384);
+        assert_eq!(processor.bin_count(), 8193);
+    }
 }

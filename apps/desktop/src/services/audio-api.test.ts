@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, mock } from "bun:test";
 
 // Mock Tauri's invoke function
-const mockInvoke = mock(() => Promise.resolve({}));
+const mockInvoke = mock(() => Promise.resolve({} as unknown));
 
 mock.module("@tauri-apps/api/core", () => ({
 	invoke: mockInvoke,
@@ -51,6 +51,8 @@ describe("audioApi", () => {
 				output_device: "Test Output",
 				generator_active: false,
 				generator_type: null,
+				backend: "cpal" as const,
+				backend_available: ["cpal" as const, "coreaudio" as const],
 			};
 			mockInvoke.mockResolvedValueOnce(mockState);
 
@@ -67,9 +69,10 @@ describe("audioApi", () => {
 
 			await audioApi.startStream("input:Test", "output:Test");
 
+			// Note: Tauri automatically converts camelCase to snake_case
 			expect(mockInvoke).toHaveBeenCalledWith("start_audio_stream", {
-				input_device_id: "input:Test",
-				output_device_id: "output:Test",
+				inputDeviceId: "input:Test",
+				outputDeviceId: "output:Test",
 			});
 		});
 
@@ -79,8 +82,8 @@ describe("audioApi", () => {
 			await audioApi.startStream();
 
 			expect(mockInvoke).toHaveBeenCalledWith("start_audio_stream", {
-				input_device_id: null,
-				output_device_id: null,
+				inputDeviceId: null,
+				outputDeviceId: null,
 			});
 		});
 	});
@@ -91,8 +94,9 @@ describe("audioApi", () => {
 
 			await audioApi.startGenerator("sine", 1000, 0.5);
 
+			// Note: Tauri automatically converts camelCase to snake_case
 			expect(mockInvoke).toHaveBeenCalledWith("start_generator", {
-				signal_type: "sine",
+				signalType: "sine",
 				frequency: 1000,
 				amplitude: 0.5,
 			});
