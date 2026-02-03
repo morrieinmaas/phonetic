@@ -14,12 +14,19 @@ export const TraceControls = ({ currentData, isRunning }: TraceControlsProps) =>
 		useTraceStore();
 	const [showList, setShowList] = useState(false);
 
-	const handleCaptureToSlot = useCallback(
+	const handleSlotClick = useCallback(
 		(slot: TraceSlot) => {
-			if (!currentData || currentData.frequencies.length === 0) return;
-			captureToSlot(slot, currentData);
+			const existingTraceId = slots[slot];
+			if (existingTraceId) {
+				// Slot has a trace - delete it to clear the slot
+				deleteTrace(existingTraceId);
+			} else {
+				// Slot is empty - capture to it
+				if (!currentData || currentData.frequencies.length === 0) return;
+				captureToSlot(slot, currentData);
+			}
 		},
-		[currentData, captureToSlot],
+		[currentData, captureToSlot, deleteTrace, slots],
 	);
 
 	const getSlotTrace = (slot: TraceSlot) => {
@@ -51,12 +58,10 @@ export const TraceControls = ({ currentData, isRunning }: TraceControlsProps) =>
 						<button
 							key={slot}
 							type="button"
-							onClick={() => handleCaptureToSlot(slot)}
-							disabled={!canCapture}
+							onClick={() => handleSlotClick(slot)}
+							disabled={!hasTrace && !canCapture}
 							title={
-								hasTrace
-									? `Update Trace ${slot} (${formatTimestamp(trace.timestamp)})`
-									: `Capture to Trace ${slot}`
+								hasTrace ? `Clear Trace ${slot} (click to remove)` : `Capture to Trace ${slot}`
 							}
 							className={`
                 w-7 h-7 text-xs font-bold rounded border transition-all
