@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { DeviceSelector } from "./components/device-selector";
 import { GeneratorControls } from "./components/generator-controls";
+import { PermissionDialog } from "./components/permission-dialog";
 import { SettingsDialog } from "./components/settings-dialog";
 import { SpectrogramDisplay } from "./components/spectrogram-display";
 import { SpectrumAnalyzer } from "./components/spectrum-analyzer";
@@ -40,6 +41,7 @@ export const App = () => {
 	});
 
 	const [settingsOpen, setSettingsOpen] = useState(false);
+	const [permissionDialogOpen, setPermissionDialogOpen] = useState(false);
 
 	// Animation frame ref for spectrum polling
 	const animationFrameRef = useRef<number | null>(null);
@@ -128,6 +130,35 @@ export const App = () => {
 	};
 
 	const handleStartStream = async () => {
+		await startStream();
+		// Check if there was a permission error after attempting to start
+		const currentError = useAudioStore.getState().error;
+		if (currentError && isPermissionError(currentError)) {
+			setPermissionDialogOpen(true);
+		}
+	};
+
+	// Detect permission-related errors
+	const isPermissionError = (errorMessage: string): boolean => {
+		const permissionKeywords = [
+			"permission",
+			"denied",
+			"not authorized",
+			"access denied",
+			"microphone",
+			"input device",
+			"no input",
+			"cannot access",
+		];
+		const lowerError = errorMessage.toLowerCase();
+		return permissionKeywords.some((keyword) => lowerError.includes(keyword));
+	};
+
+	const handleRetryWithPermission = async () => {
+		setPermissionDialogOpen(false);
+		clearError();
+		// Small delay to allow user to grant permission
+		await new Promise((resolve) => setTimeout(resolve, 500));
 		await startStream();
 	};
 
@@ -365,6 +396,13 @@ export const App = () => {
 				audioState={audioState}
 				currentFftSize={fftSize}
 				onFftSizeChange={setFftSize}
+			/>
+
+			{/* Permission dialog */}
+			<PermissionDialog
+				isOpen={permissionDialogOpen}
+				onClose={() => setPermissionDialogOpen(false)}
+				onRetry={handleRetryWithPermission}
 			/>
 		</div>
 	);
