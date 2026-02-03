@@ -60,23 +60,34 @@ export const PermissionDialog = ({ isOpen, onClose, onRetry }: PermissionDialogP
 					</div>
 					<div>
 						<h2 className="text-lg font-semibold">Microphone Access Required</h2>
-						<p className="text-sm text-muted-foreground">Phonetic needs permission to access your microphone</p>
+						<p className="text-sm text-muted-foreground">
+							Phonetic needs permission to access your microphone
+						</p>
 					</div>
 				</div>
 
 				{/* Content */}
 				<div className="p-4 space-y-4">
 					<p className="text-sm text-muted-foreground">
-						To analyze audio signals and measure frequency response, Phonetic requires microphone access.
+						To analyze audio signals and measure frequency response, Phonetic requires microphone
+						access.
 					</p>
 
 					<div className="space-y-2 text-sm">
 						<p className="font-medium">To enable microphone access:</p>
 						<ol className="list-decimal list-inside space-y-1 text-muted-foreground">
-							<li>Open <strong>System Settings</strong></li>
-							<li>Go to <strong>Privacy & Security</strong></li>
-							<li>Select <strong>Microphone</strong></li>
-							<li>Enable <strong>Phonetic</strong> in the list</li>
+							<li>
+								Open <strong>System Settings</strong>
+							</li>
+							<li>
+								Go to <strong>Privacy & Security</strong>
+							</li>
+							<li>
+								Select <strong>Microphone</strong>
+							</li>
+							<li>
+								Enable <strong>Phonetic</strong> in the list
+							</li>
 						</ol>
 					</div>
 

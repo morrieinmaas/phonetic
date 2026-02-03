@@ -117,7 +117,7 @@ export const SpectrogramDisplay = ({
 	const historyRef = useRef<number[][]>([]);
 	const imageDataRef = useRef<ImageData | null>(null);
 
-	const [colorMap, setColorMap] = useState<ColorMap>("turbo");
+	const [colorMap, setColorMap] = useState<ColorMap>("plasma");
 	const [minDb, setMinDb] = useState(DEFAULT_MIN_DB);
 	const [maxDb, setMaxDb] = useState(DEFAULT_MAX_DB);
 	const [isPaused, setIsPaused] = useState(false);

@@ -175,16 +175,18 @@ export const SettingsDialog = ({
 							>
 								<span
 									className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${
-										exclusiveMode && selectedBackend === "core_audio" ? "translate-x-5" : "translate-x-0"
+										exclusiveMode && selectedBackend === "core_audio"
+											? "translate-x-5"
+											: "translate-x-0"
 									}`}
 								/>
 							</button>
-							<span className="text-sm">{exclusiveMode && selectedBackend === "core_audio" ? "Enabled" : "Disabled"}</span>
+							<span className="text-sm">
+								{exclusiveMode && selectedBackend === "core_audio" ? "Enabled" : "Disabled"}
+							</span>
 						</div>
 						{audioState?.is_running && selectedBackend === "core_audio" && (
-							<p className="text-xs text-yellow-500">
-								Stop audio stream to change exclusive mode
-							</p>
+							<p className="text-xs text-yellow-500">Stop audio stream to change exclusive mode</p>
 						)}
 					</fieldset>
 
@@ -240,12 +242,20 @@ export const SettingsDialog = ({
 										{(audioState.sample_rate / selectedFftSize).toFixed(2)} Hz/bin
 									</span>
 								</div>
-								<div className={`flex justify-between ${selectedBackend !== "core_audio" ? "opacity-40" : ""}`}>
-								<span className="text-muted-foreground">Exclusive Mode:</span>
-								<span className={exclusiveMode && selectedBackend === "core_audio" ? "text-green-500" : "text-muted-foreground"}>
-									{exclusiveMode && selectedBackend === "core_audio" ? "Active" : "Disabled"}
-								</span>
-							</div>
+								<div
+									className={`flex justify-between ${selectedBackend !== "core_audio" ? "opacity-40" : ""}`}
+								>
+									<span className="text-muted-foreground">Exclusive Mode:</span>
+									<span
+										className={
+											exclusiveMode && selectedBackend === "core_audio"
+												? "text-green-500"
+												: "text-muted-foreground"
+										}
+									>
+										{exclusiveMode && selectedBackend === "core_audio" ? "Active" : "Disabled"}
+									</span>
+								</div>
 							</div>
 						</div>
 					)}

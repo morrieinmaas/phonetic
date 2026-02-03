@@ -148,6 +148,7 @@ export const WebGLSpectrum = ({
 	void waterfallRowRef;
 
 	const [peakHoldEnabled, setPeakHoldEnabled] = useState(true);
+	const [peakClearTrigger, setPeakClearTrigger] = useState(0);
 
 	// Theme detection
 	const [theme, setTheme] = useState<"dark" | "light">(() =>
@@ -176,6 +177,7 @@ export const WebGLSpectrum = ({
 
 	const clearPeakHold = () => {
 		peakHoldRef.current = new Array(512).fill(-120);
+		setPeakClearTrigger((t) => t + 1);
 	};
 
 	// Initialize WebGL
@@ -241,7 +243,16 @@ export const WebGLSpectrum = ({
 		const gl = glRef.current;
 		const program = programRef.current;
 
-		if (!canvas || !gl || !program || spectrumData.length === 0) return;
+		if (!canvas || !gl || !program) return;
+
+		// If no spectrum data, just clear the peak canvas and return
+		if (spectrumData.length === 0) {
+			if (peakCanvas) {
+				const ctx = peakCanvas.getContext("2d");
+				if (ctx) ctx.clearRect(0, 0, peakCanvas.width, peakCanvas.height);
+			}
+			return;
+		}
 
 		const width = canvas.width;
 		const height = canvas.height;
@@ -384,6 +395,13 @@ export const WebGLSpectrum = ({
 			}
 		}
 	}, [spectrumData, sampleRate, fftSize, themeColors, peakHoldEnabled]);
+
+	// Force render when peak hold is cleared
+	useEffect(() => {
+		if (peakClearTrigger > 0) {
+			renderSpectrum();
+		}
+	}, [peakClearTrigger, renderSpectrum]);
 
 	// Handle resize
 	useEffect(() => {

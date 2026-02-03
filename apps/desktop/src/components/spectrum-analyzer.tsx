@@ -214,11 +214,19 @@ export const SpectrumAnalyzer = ({
 
 		const peakData = peakHoldEnabled ? [...peakHoldRef.current] : new Array(512).fill(-120);
 		chartRef.current.setData([logFreqsRef.current, logData, peakData]);
-	}, [spectrumData, sampleRate, fftSize, isRunning, peakHoldEnabled, peakClearTrigger]);
+	}, [spectrumData, sampleRate, fftSize, isRunning, peakHoldEnabled]);
 
+	// Update chart when data changes
 	useEffect(() => {
 		updateChart();
 	}, [updateChart]);
+
+	// Force update when peak hold is cleared
+	useEffect(() => {
+		if (peakClearTrigger > 0) {
+			updateChart();
+		}
+	}, [peakClearTrigger, updateChart]);
 
 	return (
 		<div className="flex flex-col h-full min-h-0">

@@ -37,7 +37,7 @@ export const App = () => {
 			const stored = localStorage.getItem("phonetic-secondary-view");
 			if (stored === "transfer" || stored === "spectrogram") return stored;
 		}
-		return "transfer";
+		return "spectrogram";
 	});
 
 	const [settingsOpen, setSettingsOpen] = useState(false);
