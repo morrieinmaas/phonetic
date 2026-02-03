@@ -19,20 +19,15 @@ const FFT_SIZE: usize = 2048;
 const DEFAULT_SAMPLE_RATE: f32 = 48000.0;
 
 /// Audio backend selection
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AudioBackend {
     /// Cross-platform audio via CPAL (default)
+    #[default]
     Cpal = 0,
     /// Direct CoreAudio HAL access (macOS only, lower latency)
     #[cfg(target_os = "macos")]
     CoreAudio = 1,
-}
-
-impl Default for AudioBackend {
-    fn default() -> Self {
-        Self::Cpal
-    }
 }
 
 impl From<u8> for AudioBackend {
@@ -56,6 +51,8 @@ pub struct AudioState {
     pub generator_type: Option<String>,
     pub backend: String,
     pub backend_available: Vec<String>,
+    /// Whether exclusive (hog) mode is enabled (macOS CoreAudio only)
+    pub exclusive_mode: bool,
 }
 
 /// Thread-safe audio engine that can be used with Tauri state.
@@ -76,6 +73,8 @@ pub struct AudioEngine {
     reference_buffer: Arc<Mutex<Vec<f32>>>,
     // Audio backend selection (0 = CPAL, 1 = CoreAudio on macOS)
     backend: Arc<AtomicU8>,
+    // Exclusive mode flag (macOS CoreAudio only)
+    exclusive_mode: Arc<AtomicBool>,
 }
 
 // SAFETY: AudioEngine is Send + Sync because:
@@ -113,6 +112,7 @@ impl AudioEngine {
             thread_handle: Mutex::new(None),
             reference_buffer: Arc::new(Mutex::new(Vec::with_capacity(FFT_SIZE * 2))),
             backend: Arc::new(AtomicU8::new(AudioBackend::default() as u8)),
+            exclusive_mode: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -148,6 +148,7 @@ impl AudioEngine {
             generator_type: gen_type,
             backend: backend_name.to_string(),
             backend_available: available,
+            exclusive_mode: self.exclusive_mode.load(Ordering::Relaxed),
         }
     }
 
@@ -166,6 +167,17 @@ impl AudioEngine {
     /// Get current backend
     pub fn get_backend(&self) -> AudioBackend {
         AudioBackend::from(self.backend.load(Ordering::Relaxed))
+    }
+
+    /// Set exclusive mode (takes effect on next stream start, CoreAudio only)
+    pub fn set_exclusive_mode(&self, enabled: bool) {
+        self.exclusive_mode.store(enabled, Ordering::Relaxed);
+        log::info!("Exclusive mode set to {}", enabled);
+    }
+
+    /// Get exclusive mode setting
+    pub fn get_exclusive_mode(&self) -> bool {
+        self.exclusive_mode.load(Ordering::Relaxed)
     }
 
     pub fn start_stream(
@@ -366,6 +378,7 @@ impl AudioEngine {
         let is_running = Arc::clone(&self.is_running);
         let stop_signal = Arc::clone(&self.stop_signal);
         let reference_buffer = Arc::clone(&self.reference_buffer);
+        let exclusive_mode = self.exclusive_mode.load(Ordering::Relaxed);
 
         // Spawn audio thread
         let handle = thread::spawn(move || {
@@ -374,6 +387,7 @@ impl AudioEngine {
                 output_id,
                 sample_rate,
                 buffer_size,
+                exclusive_mode,
                 fft_processor,
                 transfer_function_processor,
                 generator,
@@ -639,6 +653,7 @@ fn run_coreaudio_streams(
     output_device_id: coreaudio::sys::AudioDeviceID,
     sample_rate: u32,
     buffer_size: u32,
+    exclusive_mode: bool,
     fft_processor: Arc<Mutex<FftProcessor>>,
     transfer_function_processor: Arc<Mutex<TransferFunctionProcessor>>,
     generator: Arc<Mutex<Generator>>,
@@ -654,6 +669,7 @@ fn run_coreaudio_streams(
         sample_rate: sample_rate as f64,
         buffer_size,
         channels: 1,
+        exclusive_mode,
     };
 
     // Clone references for input callback

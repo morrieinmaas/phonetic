@@ -371,4 +371,121 @@ mod tests {
         // Sensitivity should now be -20 dB
         assert!((calc.calibration.sensitivity_db - (-20.0)).abs() < 0.1);
     }
+
+    #[test]
+    fn test_c_weighting_1khz() {
+        let weight = c_weighting(1000.0);
+        assert!(
+            weight.abs() < 0.5,
+            "C-weighting at 1kHz should be ~0 dB, got {}",
+            weight
+        );
+    }
+
+    #[test]
+    fn test_c_weighting_low_frequency() {
+        // C-weighting is flatter than A-weighting at low frequencies
+        let weight = c_weighting(100.0);
+        assert!(
+            weight > -2.0 && weight < 2.0,
+            "C-weighting at 100Hz should be ~0 dB, got {}",
+            weight
+        );
+    }
+
+    #[test]
+    fn test_a_weighting_zero_frequency() {
+        let weight = a_weighting(0.0);
+        assert!(weight.is_infinite() && weight.is_sign_negative());
+    }
+
+    #[test]
+    fn test_c_weighting_zero_frequency() {
+        let weight = c_weighting(0.0);
+        assert!(weight.is_infinite() && weight.is_sign_negative());
+    }
+
+    #[test]
+    fn test_a_weighting_high_frequency() {
+        // A-weighting at 10kHz - check it's in reasonable range
+        let weight = a_weighting(10000.0);
+        assert!(
+            weight > -5.0 && weight < 5.0,
+            "A-weighting at 10kHz should be in reasonable range, got {}",
+            weight
+        );
+    }
+
+    #[test]
+    fn test_a_weighting_very_high_frequency() {
+        // A-weighting at 20kHz should be attenuated
+        let weight = a_weighting(20000.0);
+        assert!(weight < 0.0, "A-weighting at 20kHz should be negative");
+    }
+
+    #[test]
+    fn test_frequency_correction_boundary() {
+        let mut cal = MicrophoneCalibration::default();
+        cal.add_correction(100, 1.0);
+        cal.add_correction(10000, -1.0);
+
+        // Below lowest
+        let below = cal.get_correction(50.0);
+        assert!((below - 1.0).abs() < 0.01, "Should use lowest correction");
+
+        // Above highest
+        let above = cal.get_correction(15000.0);
+        assert!((above - (-1.0)).abs() < 0.01, "Should use highest correction");
+    }
+
+    #[test]
+    fn test_spl_with_a_weighting() {
+        let cal = MicrophoneCalibration::default();
+        let mut calc = SplCalculator::new(cal);
+        calc.set_a_weighting(true);
+
+        // At 1kHz, A-weighting should add ~0 dB
+        let spl = calc.dbfs_to_spl_at_frequency(-40.0, 1000.0);
+        let expected = calc.calibration().reference_spl_db;
+        assert!(
+            (spl - expected).abs() < 1.0,
+            "SPL at 1kHz with A-weighting should be ~{}, got {}",
+            expected,
+            spl
+        );
+    }
+
+    #[test]
+    fn test_preamp_gain() {
+        let cal = MicrophoneCalibration::default();
+        let mut calc = SplCalculator::new(cal);
+
+        let spl_no_gain = calc.dbfs_to_spl(-40.0);
+        calc.set_preamp_gain(10.0);
+        let spl_with_gain = calc.dbfs_to_spl(-40.0);
+
+        // 10dB preamp gain should result in 10dB lower SPL reading
+        assert!(
+            (spl_no_gain - spl_with_gain - 10.0).abs() < 0.1,
+            "Preamp gain should affect SPL calculation"
+        );
+    }
+
+    #[test]
+    fn test_calibration_update() {
+        let cal1 = MicrophoneCalibration::new("Test1", -40.0, 94.0);
+        let cal2 = MicrophoneCalibration::new("Test2", -30.0, 94.0);
+
+        let mut calc = SplCalculator::new(cal1);
+        let spl1 = calc.dbfs_to_spl(-40.0);
+
+        calc.set_calibration(cal2);
+        let spl2 = calc.dbfs_to_spl(-40.0);
+
+        // Different sensitivity should give different results
+        assert!(
+            (spl1 - spl2).abs() > 5.0,
+            "Different calibrations should give different results"
+        );
+    }
 }

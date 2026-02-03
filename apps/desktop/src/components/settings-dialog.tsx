@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { audioApi, type AudioState } from "../services/audio-api";
+import { type AudioState, audioApi } from "../services/audio-api";
 
 interface SettingsDialogProps {
 	isOpen: boolean;
@@ -20,15 +20,17 @@ export const SettingsDialog = ({
 }: SettingsDialogProps) => {
 	const [selectedBackend, setSelectedBackend] = useState<string>("cpal");
 	const [selectedFftSize, setSelectedFftSize] = useState<number>(currentFftSize);
+	const [exclusiveMode, setExclusiveMode] = useState<boolean>(false);
 	const [isSaving, setIsSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
 	useEffect(() => {
 		if (audioState) {
 			setSelectedBackend(audioState.backend);
+			setExclusiveMode(audioState.exclusive_mode);
 		}
 		setSelectedFftSize(currentFftSize);
-	}, [audioState, currentFftSize, isOpen]);
+	}, [audioState, currentFftSize]);
 
 	if (!isOpen) return null;
 
@@ -37,6 +39,16 @@ export const SettingsDialog = ({
 		setError(null);
 		try {
 			await audioApi.setAudioBackend(backend as "cpal" | "coreaudio");
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+		}
+	};
+
+	const handleExclusiveModeChange = async (enabled: boolean) => {
+		setExclusiveMode(enabled);
+		setError(null);
+		try {
+			await audioApi.setExclusiveMode(enabled);
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
 		}
@@ -60,7 +72,14 @@ export const SettingsDialog = ({
 	return (
 		<div className="fixed inset-0 z-50 flex items-center justify-center">
 			{/* Backdrop */}
-			<div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
+			<div
+				className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+				onClick={onClose}
+				onKeyDown={(e) => e.key === "Escape" && onClose()}
+				role="button"
+				tabIndex={-1}
+				aria-label="Close dialog"
+			/>
 
 			{/* Dialog */}
 			<div className="relative glass rounded-lg border border-border shadow-xl w-full max-w-md mx-4">
@@ -94,8 +113,8 @@ export const SettingsDialog = ({
 				{/* Content */}
 				<div className="p-4 space-y-6">
 					{/* Audio Backend */}
-					<div className="space-y-2">
-						<label className="text-sm font-medium text-foreground">Audio Backend</label>
+					<fieldset className="space-y-2">
+						<legend className="text-sm font-medium text-foreground">Audio Backend</legend>
 						<p className="text-xs text-muted-foreground mb-2">
 							{selectedBackend === "coreaudio"
 								? "CoreAudio: Lower latency (~2ms), macOS only"
@@ -121,15 +140,51 @@ export const SettingsDialog = ({
 						{audioState?.is_running && (
 							<p className="text-xs text-yellow-500">Stop audio stream to change backend</p>
 						)}
-					</div>
+					</fieldset>
+
+					{/* Exclusive Mode (CoreAudio only) */}
+					{selectedBackend === "coreaudio" && (
+						<fieldset className="space-y-2">
+							<legend className="text-sm font-medium text-foreground">Exclusive Mode</legend>
+							<p className="text-xs text-muted-foreground mb-2">
+								Request exclusive device access for lowest latency. Other apps won't be able to use
+								the device while active.
+							</p>
+							<div className="flex items-center gap-3">
+								<button
+									type="button"
+									role="switch"
+									aria-checked={exclusiveMode}
+									aria-label="Toggle exclusive mode"
+									onClick={() => handleExclusiveModeChange(!exclusiveMode)}
+									disabled={audioState?.is_running}
+									className={`relative w-11 h-6 rounded-full transition-colors ${
+										exclusiveMode ? "bg-primary" : "bg-muted"
+									} disabled:opacity-50 disabled:cursor-not-allowed`}
+								>
+									<span
+										className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${
+											exclusiveMode ? "translate-x-5" : "translate-x-0"
+										}`}
+									/>
+								</button>
+								<span className="text-sm">{exclusiveMode ? "Enabled" : "Disabled"}</span>
+							</div>
+							{audioState?.is_running && (
+								<p className="text-xs text-yellow-500">
+									Stop audio stream to change exclusive mode
+								</p>
+							)}
+						</fieldset>
+					)}
 
 					{/* FFT Size */}
-					<div className="space-y-2">
-						<label className="text-sm font-medium text-foreground">FFT Size</label>
+					<fieldset className="space-y-2">
+						<legend className="text-sm font-medium text-foreground">FFT Size</legend>
 						<p className="text-xs text-muted-foreground mb-2">
-							Larger = better frequency resolution, slower updates. Current: {selectedFftSize} bins (
-							{audioState ? ((audioState.sample_rate / selectedFftSize) * 1000).toFixed(1) : "?"} ms
-							window)
+							Larger = better frequency resolution, slower updates. Current: {selectedFftSize} bins
+							({audioState ? ((audioState.sample_rate / selectedFftSize) * 1000).toFixed(1) : "?"}{" "}
+							ms window)
 						</p>
 						<div className="grid grid-cols-3 gap-2">
 							{FFT_SIZES.map((size) => (
@@ -148,12 +203,12 @@ export const SettingsDialog = ({
 								</button>
 							))}
 						</div>
-					</div>
+					</fieldset>
 
 					{/* Audio Info */}
 					{audioState && (
 						<div className="space-y-2">
-							<label className="text-sm font-medium text-foreground">Current Audio State</label>
+							<span className="text-sm font-medium text-foreground block">Current Audio State</span>
 							<div className="text-xs space-y-1 p-3 rounded-md bg-muted/50">
 								<div className="flex justify-between">
 									<span className="text-muted-foreground">Sample Rate:</span>
@@ -175,6 +230,14 @@ export const SettingsDialog = ({
 										{(audioState.sample_rate / selectedFftSize).toFixed(2)} Hz/bin
 									</span>
 								</div>
+								{selectedBackend === "coreaudio" && (
+									<div className="flex justify-between">
+										<span className="text-muted-foreground">Exclusive Mode:</span>
+										<span className={exclusiveMode ? "text-green-500" : "text-muted-foreground"}>
+											{exclusiveMode ? "Active" : "Disabled"}
+										</span>
+									</div>
+								)}
 							</div>
 						</div>
 					)}

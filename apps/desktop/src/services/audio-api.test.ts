@@ -53,6 +53,7 @@ describe("audioApi", () => {
 				generator_type: null,
 				backend: "cpal" as const,
 				backend_available: ["cpal" as const, "coreaudio" as const],
+				exclusive_mode: false,
 			};
 			mockInvoke.mockResolvedValueOnce(mockState);
 
@@ -220,6 +221,62 @@ describe("audioApi", () => {
 			await audioApi.resetAveraging();
 
 			expect(mockInvoke).toHaveBeenCalledWith("reset_averaging");
+		});
+	});
+
+	describe("setExclusiveMode", () => {
+		it("should call set_exclusive_mode with true", async () => {
+			mockInvoke.mockResolvedValueOnce(undefined);
+
+			await audioApi.setExclusiveMode(true);
+
+			expect(mockInvoke).toHaveBeenCalledWith("set_exclusive_mode", { enabled: true });
+		});
+
+		it("should call set_exclusive_mode with false", async () => {
+			mockInvoke.mockResolvedValueOnce(undefined);
+
+			await audioApi.setExclusiveMode(false);
+
+			expect(mockInvoke).toHaveBeenCalledWith("set_exclusive_mode", { enabled: false });
+		});
+	});
+
+	describe("getExclusiveMode", () => {
+		it("should call get_exclusive_mode and return true", async () => {
+			mockInvoke.mockResolvedValueOnce(true);
+
+			const result = await audioApi.getExclusiveMode();
+
+			expect(mockInvoke).toHaveBeenCalledWith("get_exclusive_mode");
+			expect(result).toBe(true);
+		});
+
+		it("should call get_exclusive_mode and return false", async () => {
+			mockInvoke.mockResolvedValueOnce(false);
+
+			const result = await audioApi.getExclusiveMode();
+
+			expect(mockInvoke).toHaveBeenCalledWith("get_exclusive_mode");
+			expect(result).toBe(false);
+		});
+	});
+
+	describe("setAudioBackend", () => {
+		it("should call set_audio_backend with cpal", async () => {
+			mockInvoke.mockResolvedValueOnce(undefined);
+
+			await audioApi.setAudioBackend("cpal");
+
+			expect(mockInvoke).toHaveBeenCalledWith("set_audio_backend", { backend: "cpal" });
+		});
+
+		it("should call set_audio_backend with coreaudio", async () => {
+			mockInvoke.mockResolvedValueOnce(undefined);
+
+			await audioApi.setAudioBackend("coreaudio");
+
+			expect(mockInvoke).toHaveBeenCalledWith("set_audio_backend", { backend: "coreaudio" });
 		});
 	});
 });

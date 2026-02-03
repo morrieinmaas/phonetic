@@ -30,6 +30,8 @@ export interface AudioState {
 	generator_type: string | null;
 	backend: AudioBackend;
 	backend_available: AudioBackend[];
+	/** Whether exclusive (hog) mode is enabled (macOS CoreAudio only) */
+	exclusive_mode: boolean;
 }
 
 /** Signal generator types */
@@ -43,3 +45,48 @@ export interface TransferFunctionData {
 	group_delay_ms: number[];
 	frequencies: number[];
 }
+
+/** Reference curve types available for overlay */
+export type ReferenceCurveType =
+	| "flat"
+	| "iso226_40_phon"
+	| "iso226_60_phon"
+	| "iso226_80_phon"
+	| "x_curve"
+	| "house_curve"
+	| "a_weighting"
+	| "c_weighting";
+
+/** Reference curve info */
+export interface ReferenceCurveInfo {
+	curve_type: ReferenceCurveType;
+	name: string;
+	description: string;
+}
+
+/** Reference curve data point */
+export interface ReferenceCurvePoint {
+	frequency: number;
+	amplitude_db: number;
+}
+
+/** Complete reference curve with metadata */
+export interface ReferenceCurve {
+	curve_type: ReferenceCurveType;
+	name: string;
+	description: string;
+	points: ReferenceCurvePoint[];
+}
+
+/** Stored measurement trace for A/B comparison */
+export interface StoredTrace {
+	id: string;
+	name: string;
+	color: string;
+	timestamp: number;
+	data: TransferFunctionData;
+	visible: boolean;
+}
+
+/** Trace slot identifiers for quick A/B comparison */
+export type TraceSlot = "A" | "B" | "C" | "D";

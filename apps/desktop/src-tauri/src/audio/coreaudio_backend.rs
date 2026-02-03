@@ -16,10 +16,11 @@ use coreaudio::audio_unit::audio_format::LinearPcmFlags;
 use coreaudio::audio_unit::render_callback::{self, data};
 use coreaudio::audio_unit::{AudioUnit, Element, SampleFormat, Scope, StreamFormat};
 use coreaudio::sys::{
-    kAudioHardwarePropertyDefaultInputDevice, kAudioHardwarePropertyDefaultOutputDevice,
-    kAudioHardwarePropertyDevices, kAudioObjectPropertyElementMain, kAudioObjectPropertyName,
-    kAudioObjectPropertyScopeGlobal, kAudioObjectSystemObject, AudioDeviceID,
-    AudioObjectGetPropertyData, AudioObjectGetPropertyDataSize, AudioObjectPropertyAddress,
+    kAudioDevicePropertyHogMode, kAudioHardwarePropertyDefaultInputDevice,
+    kAudioHardwarePropertyDefaultOutputDevice, kAudioHardwarePropertyDevices,
+    kAudioObjectPropertyElementMain, kAudioObjectPropertyName, kAudioObjectPropertyScopeGlobal,
+    kAudioObjectSystemObject, AudioDeviceID, AudioObjectGetPropertyData,
+    AudioObjectGetPropertyDataSize, AudioObjectPropertyAddress, AudioObjectSetPropertyData,
 };
 use parking_lot::Mutex;
 use std::ffi::c_void;
@@ -42,6 +43,8 @@ pub struct CoreAudioConfig {
     pub sample_rate: f64,
     pub buffer_size: u32,
     pub channels: u32,
+    /// Request exclusive (hog) mode for lowest latency
+    pub exclusive_mode: bool,
 }
 
 impl Default for CoreAudioConfig {
@@ -50,6 +53,109 @@ impl Default for CoreAudioConfig {
             sample_rate: 48000.0,
             buffer_size: 512,
             channels: 1,
+            exclusive_mode: false,
+        }
+    }
+}
+
+/// Acquire exclusive (hog) mode for a device.
+/// Returns the process ID that owns the device (our PID on success).
+pub fn acquire_exclusive_mode(device_id: AudioDeviceID) -> Result<i32, String> {
+    unsafe {
+        let property_address = AudioObjectPropertyAddress {
+            mSelector: kAudioDevicePropertyHogMode,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain,
+        };
+
+        // Get our process ID
+        let our_pid = std::process::id() as i32;
+
+        // Set hog mode to our PID
+        let mut pid = our_pid;
+        let data_size = mem::size_of::<i32>() as u32;
+
+        let status = AudioObjectSetPropertyData(
+            device_id,
+            &property_address,
+            0,
+            std::ptr::null(),
+            data_size,
+            &mut pid as *mut _ as *const c_void,
+        );
+
+        if status != 0 {
+            return Err(format!(
+                "Failed to acquire exclusive mode: error code {}",
+                status
+            ));
+        }
+
+        log::info!("Acquired exclusive mode for device {}", device_id);
+        Ok(our_pid)
+    }
+}
+
+/// Release exclusive (hog) mode for a device.
+pub fn release_exclusive_mode(device_id: AudioDeviceID) -> Result<(), String> {
+    unsafe {
+        let property_address = AudioObjectPropertyAddress {
+            mSelector: kAudioDevicePropertyHogMode,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain,
+        };
+
+        // Set hog mode to -1 to release
+        let mut pid: i32 = -1;
+        let data_size = mem::size_of::<i32>() as u32;
+
+        let status = AudioObjectSetPropertyData(
+            device_id,
+            &property_address,
+            0,
+            std::ptr::null(),
+            data_size,
+            &mut pid as *mut _ as *const c_void,
+        );
+
+        if status != 0 {
+            return Err(format!(
+                "Failed to release exclusive mode: error code {}",
+                status
+            ));
+        }
+
+        log::info!("Released exclusive mode for device {}", device_id);
+        Ok(())
+    }
+}
+
+/// Check if a device is in exclusive mode and who owns it.
+/// Returns Some(pid) if in exclusive mode, None if available.
+pub fn get_exclusive_mode_owner(device_id: AudioDeviceID) -> Option<i32> {
+    unsafe {
+        let property_address = AudioObjectPropertyAddress {
+            mSelector: kAudioDevicePropertyHogMode,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain,
+        };
+
+        let mut pid: i32 = -1;
+        let mut data_size = mem::size_of::<i32>() as u32;
+
+        let status = AudioObjectGetPropertyData(
+            device_id,
+            &property_address,
+            0,
+            std::ptr::null(),
+            &mut data_size,
+            &mut pid as *mut _ as *mut c_void,
+        );
+
+        if status == 0 && pid != -1 {
+            Some(pid)
+        } else {
+            None
         }
     }
 }
@@ -267,6 +373,8 @@ pub fn get_default_output_device() -> Option<AudioDeviceID> {
 pub struct CoreAudioInputStream {
     audio_unit: AudioUnit,
     is_running: Arc<AtomicBool>,
+    device_id: AudioDeviceID,
+    exclusive_mode: bool,
 }
 
 impl CoreAudioInputStream {
@@ -334,6 +442,12 @@ impl CoreAudioInputStream {
             )
             .map_err(|e| format!("Failed to set stream format: {:?}", e))?;
 
+        // Acquire exclusive mode if requested
+        let exclusive_mode = config.exclusive_mode;
+        if exclusive_mode {
+            acquire_exclusive_mode(device_id)?;
+        }
+
         // Set up render callback
         let callback = Arc::new(Mutex::new(callback));
 
@@ -353,6 +467,8 @@ impl CoreAudioInputStream {
         Ok(Self {
             audio_unit,
             is_running,
+            device_id,
+            exclusive_mode,
         })
     }
 
@@ -374,9 +490,25 @@ impl CoreAudioInputStream {
         Ok(())
     }
 
+    /// Check if exclusive mode is active
+    pub fn is_exclusive(&self) -> bool {
+        self.exclusive_mode
+    }
+
     /// Check if stream is running
     pub fn is_running(&self) -> bool {
         self.is_running.load(Ordering::Relaxed)
+    }
+}
+
+impl Drop for CoreAudioInputStream {
+    fn drop(&mut self) {
+        // Release exclusive mode if we acquired it
+        if self.exclusive_mode {
+            if let Err(e) = release_exclusive_mode(self.device_id) {
+                log::warn!("Failed to release exclusive mode on input: {}", e);
+            }
+        }
     }
 }
 
@@ -384,6 +516,8 @@ impl CoreAudioInputStream {
 pub struct CoreAudioOutputStream {
     audio_unit: AudioUnit,
     is_running: Arc<AtomicBool>,
+    device_id: AudioDeviceID,
+    exclusive_mode: bool,
 }
 
 impl CoreAudioOutputStream {
@@ -431,6 +565,12 @@ impl CoreAudioOutputStream {
             )
             .map_err(|e| format!("Failed to set stream format: {:?}", e))?;
 
+        // Acquire exclusive mode if requested
+        let exclusive_mode = config.exclusive_mode;
+        if exclusive_mode {
+            acquire_exclusive_mode(device_id)?;
+        }
+
         // Set up render callback
         let callback = Arc::new(Mutex::new(callback));
 
@@ -450,6 +590,8 @@ impl CoreAudioOutputStream {
         Ok(Self {
             audio_unit,
             is_running,
+            device_id,
+            exclusive_mode,
         })
     }
 
@@ -474,6 +616,22 @@ impl CoreAudioOutputStream {
     /// Check if stream is running
     pub fn is_running(&self) -> bool {
         self.is_running.load(Ordering::Relaxed)
+    }
+
+    /// Check if exclusive mode is active
+    pub fn is_exclusive(&self) -> bool {
+        self.exclusive_mode
+    }
+}
+
+impl Drop for CoreAudioOutputStream {
+    fn drop(&mut self) {
+        // Release exclusive mode if we acquired it
+        if self.exclusive_mode {
+            if let Err(e) = release_exclusive_mode(self.device_id) {
+                log::warn!("Failed to release exclusive mode on output: {}", e);
+            }
+        }
     }
 }
 
@@ -504,5 +662,42 @@ mod tests {
 
         // Should have at least a default output on most Macs
         assert!(output.is_some() || input.is_some());
+    }
+
+    #[test]
+    fn test_exclusive_mode_owner_check() {
+        // Test that we can check exclusive mode status
+        if let Some(device_id) = get_default_output_device() {
+            let owner = get_exclusive_mode_owner(device_id);
+            println!(
+                "Exclusive mode owner for default output: {:?}",
+                owner
+            );
+            // Device should typically not be in exclusive mode during tests
+            // (unless something else has acquired it)
+        }
+    }
+
+    #[test]
+    fn test_config_default() {
+        let config = CoreAudioConfig::default();
+        assert_eq!(config.sample_rate, 48000.0);
+        assert_eq!(config.buffer_size, 512);
+        assert_eq!(config.channels, 1);
+        assert!(!config.exclusive_mode);
+    }
+
+    #[test]
+    fn test_config_with_exclusive() {
+        let config = CoreAudioConfig {
+            sample_rate: 96000.0,
+            buffer_size: 128,
+            channels: 2,
+            exclusive_mode: true,
+        };
+        assert_eq!(config.sample_rate, 96000.0);
+        assert_eq!(config.buffer_size, 128);
+        assert_eq!(config.channels, 2);
+        assert!(config.exclusive_mode);
     }
 }

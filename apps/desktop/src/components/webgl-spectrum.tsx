@@ -453,9 +453,14 @@ export const WebGLSpectrum = ({
 					</span>
 				</div>
 			</div>
-			<div className={`flex-1 min-h-[280px] relative rounded-lg overflow-hidden ${themeColors.containerBg}`}>
+			<div
+				className={`flex-1 min-h-[280px] relative rounded-lg overflow-hidden ${themeColors.containerBg}`}
+			>
 				<canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
-				<canvas ref={peakCanvasRef} className="absolute inset-0 w-full h-full pointer-events-none" />
+				<canvas
+					ref={peakCanvasRef}
+					className="absolute inset-0 w-full h-full pointer-events-none"
+				/>
 				{/* Grid overlay using SVG */}
 				<svg
 					className="absolute inset-0 w-full h-full pointer-events-none"

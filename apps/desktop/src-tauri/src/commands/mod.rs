@@ -6,9 +6,9 @@ use crate::audio::{
 use crate::dsp::{
     export_impulse_response_csv, export_impulse_response_json, export_impulse_response_txt,
     export_transfer_function_csv, export_transfer_function_json, export_transfer_function_txt,
-    write_to_file, DelayFinder, DelayResult, ExportFormat, ImpulseResponseData,
-    ImpulseResponseProcessor, MeasurementMetadata, MicrophoneCalibration, SplCalculator,
-    TransferFunctionData,
+    generate_standard_frequencies, write_to_file, DelayFinder, DelayResult, ExportFormat,
+    ImpulseResponseData, ImpulseResponseProcessor, MeasurementMetadata, MicrophoneCalibration,
+    ReferenceCurve, ReferenceCurveType, SplCalculator, TransferFunctionData,
 };
 use parking_lot::Mutex;
 
@@ -62,6 +62,16 @@ pub fn get_audio_state(engine: State<'_, AudioEngine>) -> AudioState {
 #[tauri::command]
 pub fn set_audio_backend(engine: State<'_, AudioEngine>, backend: AudioBackend) -> Result<(), String> {
     engine.set_backend(backend)
+}
+
+#[tauri::command]
+pub fn set_exclusive_mode(engine: State<'_, AudioEngine>, enabled: bool) {
+    engine.set_exclusive_mode(enabled)
+}
+
+#[tauri::command]
+pub fn get_exclusive_mode(engine: State<'_, AudioEngine>) -> bool {
+    engine.get_exclusive_mode()
 }
 
 #[tauri::command]
@@ -336,6 +346,59 @@ pub fn export_impulse_response(
     };
 
     write_to_file(&file_path, &content).map_err(|e| format!("Failed to write file: {}", e))
+}
+
+// ============================================================================
+// Reference Curve Commands
+// ============================================================================
+
+/// Reference curve info for frontend display
+#[derive(serde::Serialize)]
+pub struct ReferenceCurveInfo {
+    pub curve_type: ReferenceCurveType,
+    pub name: String,
+    pub description: String,
+}
+
+#[tauri::command]
+pub fn get_available_reference_curves() -> Vec<ReferenceCurveInfo> {
+    ReferenceCurveType::all()
+        .into_iter()
+        .map(|ct| ReferenceCurveInfo {
+            curve_type: ct,
+            name: ct.display_name().to_string(),
+            description: match ct {
+                ReferenceCurveType::Flat => "Flat frequency response reference".to_string(),
+                ReferenceCurveType::Iso226_40Phon => {
+                    "Equal-loudness contour at 40 phon (quiet)".to_string()
+                }
+                ReferenceCurveType::Iso226_60Phon => {
+                    "Equal-loudness contour at 60 phon (moderate)".to_string()
+                }
+                ReferenceCurveType::Iso226_80Phon => {
+                    "Equal-loudness contour at 80 phon (loud)".to_string()
+                }
+                ReferenceCurveType::XCurve => "Cinema calibration curve (ISO 2969)".to_string(),
+                ReferenceCurveType::HouseCurve => "Live sound target curve".to_string(),
+                ReferenceCurveType::AWeighting => "A-weighting frequency response".to_string(),
+                ReferenceCurveType::CWeighting => "C-weighting frequency response".to_string(),
+            },
+        })
+        .collect()
+}
+
+#[tauri::command]
+pub fn get_reference_curve(curve_type: ReferenceCurveType, num_points: usize) -> ReferenceCurve {
+    let frequencies = generate_standard_frequencies(num_points.clamp(10, 1024));
+    ReferenceCurve::generate(curve_type, &frequencies)
+}
+
+#[tauri::command]
+pub fn get_reference_curve_at_frequencies(
+    curve_type: ReferenceCurveType,
+    frequencies: Vec<f64>,
+) -> ReferenceCurve {
+    ReferenceCurve::generate(curve_type, &frequencies)
 }
 
 #[cfg(test)]

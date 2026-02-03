@@ -1,13 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
-import type { TransferFunctionData } from "../services/audio-api";
+import { useTraceStore } from "../stores/trace-store";
+import type {
+	ReferenceCurve,
+	ReferenceCurveType,
+	StoredTrace,
+	TransferFunctionData,
+} from "../types/audio";
+import { ReferenceCurveSelector } from "./reference-curve-selector";
+import { TraceControls } from "./trace-controls";
 
 interface TransferFunctionDisplayProps {
 	data: TransferFunctionData | null;
 	isRunning: boolean;
 	onResetAveraging: () => void;
 }
+
+/** Maximum number of stored traces that can be displayed simultaneously */
+const MAX_DISPLAYED_TRACES = 4;
 
 // Map to log frequency scale for display
 const mapToLogScale = (
@@ -83,6 +94,13 @@ export const TransferFunctionDisplay = ({
 	const [theme, setTheme] = useState<"dark" | "light">(() =>
 		document.documentElement.classList.contains("dark") ? "dark" : "light",
 	);
+	const [selectedRefCurve, setSelectedRefCurve] = useState<ReferenceCurveType | null>(null);
+	const [refCurveData, setRefCurveData] = useState<ReferenceCurve | null>(null);
+
+	// Get visible traces from store (limited to display count)
+	const visibleTraces = useTraceStore((state) =>
+		state.traces.filter((t) => t.visible).slice(0, MAX_DISPLAYED_TRACES),
+	);
 
 	// Watch for theme changes
 	useEffect(() => {
@@ -98,7 +116,7 @@ export const TransferFunctionDisplay = ({
 		logFreqsRef.current = generateLogFrequencies(20, 20000, 512);
 	}, []);
 
-	// Create chart (recreate when theme changes)
+	// Create chart (recreate when theme or number of visible traces changes)
 	useEffect(() => {
 		if (!containerRef.current) return;
 
@@ -111,6 +129,43 @@ export const TransferFunctionDisplay = ({
 		const labelColor = isDark ? "#f5f5f5" : "#171717";
 		const gridColor = isDark ? "rgba(255,255,255,0.2)" : "rgba(0,0,0,0.2)";
 		const tickColor = isDark ? "rgba(255,255,255,0.4)" : "rgba(0,0,0,0.4)";
+
+		// Build series array: [x, magnitude, phase, reference, ...traces]
+		const series: uPlot.Series[] = [
+			{}, // X axis
+			{
+				label: "Magnitude",
+				stroke: isDark ? "oklch(0.75 0.18 280)" : "oklch(0.55 0.2 280)",
+				width: 2.5,
+				scale: "magnitude",
+			},
+			{
+				label: "Phase",
+				stroke: isDark ? "oklch(0.75 0.18 200)" : "oklch(0.55 0.2 200)",
+				width: 1.5,
+				scale: "phase",
+				dash: [4, 2],
+			},
+			{
+				label: "Reference",
+				stroke: isDark ? "oklch(0.7 0.15 120)" : "oklch(0.5 0.2 120)",
+				width: 1.5,
+				scale: "magnitude",
+				dash: [6, 3],
+			},
+		];
+
+		// Add series for stored traces (pre-allocate slots for smooth updates)
+		for (let i = 0; i < MAX_DISPLAYED_TRACES; i++) {
+			const trace = visibleTraces[i];
+			series.push({
+				label: trace?.name ?? `Trace ${i + 1}`,
+				stroke: trace?.color ?? "transparent",
+				width: 2,
+				scale: "magnitude",
+				show: !!trace,
+			});
+		}
 
 		const opts: uPlot.Options = {
 			width,
@@ -183,30 +238,22 @@ export const TransferFunctionDisplay = ({
 					splits: [-180, -90, 0, 90, 180],
 				},
 			],
-			series: [
-				{},
-				{
-					label: "Magnitude",
-					stroke: isDark ? "oklch(0.75 0.18 280)" : "oklch(0.55 0.2 280)",
-					width: 2,
-					scale: "magnitude",
-				},
-				{
-					label: "Phase",
-					stroke: isDark ? "oklch(0.75 0.18 200)" : "oklch(0.55 0.2 200)",
-					width: 1.5,
-					scale: "phase",
-					dash: [4, 2],
-				},
-			],
+			series,
 		};
 
-		// Initial empty data
+		// Build initial data array
+		const numPoints = logFreqsRef.current.length || 512;
 		const chartData: uPlot.AlignedData = [
-			logFreqsRef.current,
-			new Array(512).fill(0),
-			new Array(512).fill(0),
+			logFreqsRef.current.length > 0 ? logFreqsRef.current : new Array(numPoints).fill(20),
+			new Array(numPoints).fill(0), // Magnitude
+			new Array(numPoints).fill(0), // Phase
+			new Array(numPoints).fill(null), // Reference curve
 		];
+
+		// Add empty arrays for trace slots
+		for (let i = 0; i < MAX_DISPLAYED_TRACES; i++) {
+			chartData.push(new Array(numPoints).fill(null));
+		}
 
 		chartRef.current = new uPlot(opts, chartData, container);
 
@@ -229,22 +276,85 @@ export const TransferFunctionDisplay = ({
 			chartRef.current?.destroy();
 			chartRef.current = null;
 		};
-	}, [theme]);
+	}, [theme, visibleTraces]);
+
+	// Map reference curve to log frequency scale
+	const getRefCurveValues = useCallback((): (number | null)[] => {
+		if (!refCurveData || refCurveData.points.length === 0) {
+			return new Array(logFreqsRef.current.length).fill(null);
+		}
+
+		return logFreqsRef.current.map((freq) => {
+			// Find closest point in reference curve
+			let closestIdx = 0;
+			let minDiff = Math.abs(refCurveData.points[0]?.frequency ?? 0 - freq);
+
+			for (let i = 1; i < refCurveData.points.length; i++) {
+				const point = refCurveData.points[i];
+				if (!point) continue;
+				const diff = Math.abs(point.frequency - freq);
+				if (diff < minDiff) {
+					minDiff = diff;
+					closestIdx = i;
+				}
+			}
+
+			return refCurveData.points[closestIdx]?.amplitude_db ?? null;
+		});
+	}, [refCurveData]);
+
+	// Map stored trace to log frequency scale
+	const getTraceValues = useCallback((trace: StoredTrace): (number | null)[] => {
+		return mapToLogScale(trace.data.magnitude_db, trace.data.frequencies, logFreqsRef.current);
+	}, []);
 
 	// Update chart data
 	const updateChart = useCallback(() => {
-		if (!chartRef.current || !data || !isRunning) return;
+		if (!chartRef.current) return;
 
-		const logMagnitude = mapToLogScale(data.magnitude_db, data.frequencies, logFreqsRef.current);
-		const logPhase = mapToLogScale(data.phase_deg, data.frequencies, logFreqsRef.current);
+		const logFreqs = logFreqsRef.current;
+		const numPoints = logFreqs.length || 512;
 
-		// Auto-zoom: calculate appropriate scale bounds
+		// Get live data or empty arrays
+		const logMagnitude =
+			data && isRunning
+				? mapToLogScale(data.magnitude_db, data.frequencies, logFreqs)
+				: new Array(numPoints).fill(null);
+		const logPhase =
+			data && isRunning
+				? mapToLogScale(data.phase_deg, data.frequencies, logFreqs)
+				: new Array(numPoints).fill(null);
+		const refCurveValues = getRefCurveValues();
+
+		// Build chart data array
+		const chartData: uPlot.AlignedData = [
+			logFreqs.length > 0 ? logFreqs : new Array(numPoints).fill(20),
+			logMagnitude,
+			logPhase,
+			refCurveValues,
+		];
+
+		// Add trace data
+		for (let i = 0; i < MAX_DISPLAYED_TRACES; i++) {
+			const trace = visibleTraces[i];
+			chartData.push(trace ? getTraceValues(trace) : new Array(numPoints).fill(null));
+		}
+
+		// Auto-zoom: calculate appropriate scale bounds considering all visible data
 		const magnitudeScale = chartRef.current.scales.magnitude;
 		if (magnitudeScale) {
 			if (autoZoom) {
-				const [magMin, magMax] = calculateScaleBounds(logMagnitude);
-				magnitudeScale.min = magMin;
-				magnitudeScale.max = magMax;
+				// Combine all visible magnitude data for scale calculation
+				const allMagnitudes = [
+					...(data && isRunning ? logMagnitude : []),
+					...visibleTraces.flatMap((t) => getTraceValues(t)),
+				].filter((v): v is number => v !== null);
+
+				if (allMagnitudes.length > 0) {
+					const [magMin, magMax] = calculateScaleBounds(allMagnitudes);
+					magnitudeScale.min = magMin;
+					magnitudeScale.max = magMax;
+				}
 			} else {
 				// Fixed scale
 				magnitudeScale.min = -40;
@@ -252,8 +362,8 @@ export const TransferFunctionDisplay = ({
 			}
 		}
 
-		chartRef.current.setData([logFreqsRef.current, logMagnitude, logPhase]);
-	}, [data, isRunning, autoZoom]);
+		chartRef.current.setData(chartData);
+	}, [data, isRunning, autoZoom, getRefCurveValues, getTraceValues, visibleTraces]);
 
 	useEffect(() => {
 		updateChart();
@@ -267,11 +377,11 @@ export const TransferFunctionDisplay = ({
 
 	return (
 		<div className="flex flex-col h-full min-h-0">
-			<div className="flex items-center justify-between mb-2 flex-shrink-0">
+			<div className="flex items-center justify-between mb-2 flex-shrink-0 flex-wrap gap-2">
 				<h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
 					Transfer Function
 				</h2>
-				<div className="flex items-center gap-4">
+				<div className="flex items-center gap-3 flex-wrap">
 					{isRunning && data && (
 						<div className="flex items-center gap-2">
 							<span className="text-xs text-muted-foreground">Coherence:</span>
@@ -290,6 +400,13 @@ export const TransferFunctionDisplay = ({
 							</div>
 						</div>
 					)}
+					<TraceControls currentData={data} isRunning={isRunning} />
+					<ReferenceCurveSelector
+						selectedCurve={selectedRefCurve}
+						onCurveChange={setSelectedRefCurve}
+						onCurveDataChange={setRefCurveData}
+						numPoints={512}
+					/>
 					<button
 						type="button"
 						onClick={() => setAutoZoom(!autoZoom)}
@@ -312,16 +429,16 @@ export const TransferFunctionDisplay = ({
 				</div>
 			</div>
 			<div ref={containerRef} className="flex-1 min-h-[220px] relative">
-				{!isRunning && (
+				{!isRunning && visibleTraces.length === 0 && (
 					<div className="absolute inset-0 flex items-center justify-center text-muted-foreground bg-background/50 z-10">
 						Start audio stream and generator to measure transfer function
 					</div>
 				)}
 			</div>
-			<div className="flex gap-4 mt-2 text-xs text-muted-foreground flex-shrink-0">
+			<div className="flex gap-4 mt-2 text-xs text-muted-foreground flex-shrink-0 flex-wrap">
 				<span className="flex items-center gap-1">
 					<span className="w-4 h-0.5 bg-[oklch(0.7_0.15_280)]" />
-					Magnitude
+					Live
 				</span>
 				<span className="flex items-center gap-1">
 					<span
@@ -330,6 +447,21 @@ export const TransferFunctionDisplay = ({
 					/>
 					Phase
 				</span>
+				{refCurveData && (
+					<span className="flex items-center gap-1">
+						<span
+							className="w-4 h-0.5 bg-[oklch(0.6_0.15_120)] border-dashed"
+							style={{ borderTopWidth: 1 }}
+						/>
+						{refCurveData.name}
+					</span>
+				)}
+				{visibleTraces.map((trace) => (
+					<span key={trace.id} className="flex items-center gap-1">
+						<span className="w-4 h-0.5" style={{ backgroundColor: trace.color }} />
+						{trace.name}
+					</span>
+				))}
 			</div>
 		</div>
 	);

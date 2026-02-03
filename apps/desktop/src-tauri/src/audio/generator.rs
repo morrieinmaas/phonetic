@@ -317,4 +317,122 @@ mod tests {
         gen.set_signal_type(SignalType::Sweep);
         assert_eq!(gen.signal_type_name(), "sweep");
     }
+
+    #[test]
+    fn test_sine_zero_amplitude() {
+        let mut gen = Generator::new(SAMPLE_RATE);
+        gen.set_signal_type(SignalType::Sine);
+        gen.set_amplitude(0.0);
+
+        for _ in 0..100 {
+            let sample = gen.next_sample();
+            assert!(sample.abs() < 0.001, "Zero amplitude should produce silence");
+        }
+    }
+
+    #[test]
+    fn test_sine_nyquist_frequency() {
+        let mut gen = Generator::new(SAMPLE_RATE);
+        gen.set_signal_type(SignalType::Sine);
+        gen.set_frequency(SAMPLE_RATE / 2.0); // Nyquist
+        gen.set_amplitude(1.0);
+
+        // Should still produce valid samples
+        for _ in 0..100 {
+            let sample = gen.next_sample();
+            assert!(sample.is_finite(), "Should produce finite samples at Nyquist");
+        }
+    }
+
+    #[test]
+    fn test_sine_low_frequency() {
+        let mut gen = Generator::new(SAMPLE_RATE);
+        gen.set_signal_type(SignalType::Sine);
+        gen.set_frequency(20.0);
+        gen.set_amplitude(1.0);
+
+        let samples: Vec<f32> = (0..48000).map(|_| gen.next_sample()).collect();
+        let max = samples.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        let min = samples.iter().cloned().fold(f32::INFINITY, f32::min);
+
+        // Should span full amplitude range
+        assert!(max > 0.9, "Low freq sine should reach positive peak");
+        assert!(min < -0.9, "Low freq sine should reach negative peak");
+    }
+
+    #[test]
+    fn test_multiple_sample_rates() {
+        for &rate in &[44100.0, 48000.0, 96000.0, 192000.0] {
+            let mut gen = Generator::new(rate);
+            gen.set_signal_type(SignalType::Sine);
+            gen.set_frequency(1000.0);
+            gen.set_amplitude(1.0);
+
+            for _ in 0..100 {
+                let sample = gen.next_sample();
+                assert!(
+                    (-1.0..=1.0).contains(&sample),
+                    "Sample rate {} should produce valid samples",
+                    rate
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_sweep_progress() {
+        let mut gen = Generator::new(SAMPLE_RATE);
+        gen.set_signal_type(SignalType::Sweep);
+        gen.set_amplitude(1.0);
+
+        // Generate enough samples for a full sweep
+        let num_samples = (SAMPLE_RATE * 5.0) as usize;
+        let mut all_finite = true;
+        for _ in 0..num_samples {
+            let sample = gen.next_sample();
+            if !sample.is_finite() {
+                all_finite = false;
+                break;
+            }
+        }
+
+        assert!(all_finite, "All sweep samples should be finite");
+    }
+
+    #[test]
+    fn test_pink_noise_variance() {
+        let mut gen = Generator::new(SAMPLE_RATE);
+        gen.set_signal_type(SignalType::PinkNoise);
+        gen.set_amplitude(1.0);
+
+        let samples: Vec<f32> = (0..10000).map(|_| gen.next_sample()).collect();
+        let mean: f32 = samples.iter().sum::<f32>() / samples.len() as f32;
+        let variance: f32 = samples.iter().map(|&x| (x - mean).powi(2)).sum::<f32>() / samples.len() as f32;
+
+        // Pink noise should have some variance (not all zeros)
+        assert!(variance > 0.01, "Pink noise should have variance");
+    }
+
+    #[test]
+    fn test_continuous_output() {
+        let mut gen = Generator::new(SAMPLE_RATE);
+        gen.set_signal_type(SignalType::Sine);
+        gen.set_frequency(440.0);
+        gen.set_amplitude(1.0);
+
+        // Generate a large number of samples without issues
+        let mut prev_sample = gen.next_sample();
+        for _ in 0..100000 {
+            let sample = gen.next_sample();
+            // Samples should not jump by more than expected for a sine wave
+            let max_delta = 2.0 * std::f32::consts::PI * 440.0 / SAMPLE_RATE as f32 * 1.5;
+            assert!(
+                (sample - prev_sample).abs() < max_delta * 2.0,
+                "Sample delta too large: {} -> {}",
+                prev_sample,
+                sample
+            );
+            prev_sample = sample;
+        }
+    }
 }

@@ -5,23 +5,40 @@ Modern, Apple Silicon-native audio measurement system. A rival to [AFMG SysTune]
 ## Features
 
 ### Core Measurements
-- Real-time FFT / spectrum analysis
-- Transfer function (input vs output comparison)
-- Impulse response measurement
+
+- Real-time FFT / spectrum analysis with peak hold
+- Transfer function (input vs output comparison) with auto-zoom
+- Impulse response measurement with RT60 estimation
 - Phase response and group delay
 - SPL metering (dBFS, dB SPL with calibration)
-- Multi-channel support (8+ channels)
+- Delay finder (cross-correlation based)
+- Coherence display
 
 ### Signal Generator
+
 - Sine wave (20Hz - 20kHz)
 - Pink noise
 - White noise
-- Log sweep
+- Logarithmic sweep
+
+### Calibration
+
+- Microphone calibration file import (.cal format)
+- A-weighting and C-weighting filters
+- Sensitivity and preamp gain compensation
+- Reference curves overlay (ISO 226, X-curve, house curve, weighting curves)
+
+### Export
+
+- CSV, JSON, and SMAART-compatible TXT formats
+- Transfer function and impulse response export
 
 ### UI
-- Modern dark/light theme
-- 60fps WebGL visualization
+
+- Modern dark/light theme with full support across all visualizations
+- 60fps WebGL or uPlot spectrum visualization (user selectable)
 - Glassmorphism design
+- Settings dialog with FFT size and backend selection
 
 ## Tech Stack
 

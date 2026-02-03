@@ -1,6 +1,6 @@
 mod audio;
 mod commands;
-mod dsp;
+pub mod dsp;
 
 use tauri::Manager;
 
@@ -28,6 +28,8 @@ pub fn run() {
             commands::list_audio_devices,
             commands::get_audio_state,
             commands::set_audio_backend,
+            commands::set_exclusive_mode,
+            commands::get_exclusive_mode,
             commands::start_audio_stream,
             commands::stop_audio_stream,
             commands::start_generator,
@@ -59,6 +61,10 @@ pub fn run() {
             // Export commands
             commands::export_transfer_function,
             commands::export_impulse_response,
+            // Reference curve commands
+            commands::get_available_reference_curves,
+            commands::get_reference_curve,
+            commands::get_reference_curve_at_frequencies,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,5 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AudioBackend, AudioDevice, AudioDeviceList, AudioState, SignalType } from "../types/audio";
+import type {
+	AudioBackend,
+	AudioDeviceList,
+	AudioState,
+	ReferenceCurve,
+	ReferenceCurveInfo,
+	ReferenceCurveType,
+	SignalType,
+} from "../types/audio";
 
 /** Transfer function measurement data */
 export interface TransferFunctionData {
@@ -119,7 +127,60 @@ export const audioApi = {
 	 * Set audio backend (requires stream to be stopped)
 	 * @param backend - Backend to use ("cpal" or "coreaudio")
 	 */
-	setAudioBackend: (backend: AudioBackend): Promise<void> => invoke("set_audio_backend", { backend }),
+	setAudioBackend: (backend: AudioBackend): Promise<void> =>
+		invoke("set_audio_backend", { backend }),
+
+	/**
+	 * Set exclusive mode (macOS CoreAudio only)
+	 * Requires stream to be stopped; takes effect on next stream start
+	 * @param enabled - Whether to request exclusive device access
+	 */
+	setExclusiveMode: (enabled: boolean): Promise<void> => invoke("set_exclusive_mode", { enabled }),
+
+	/**
+	 * Get current exclusive mode setting
+	 */
+	getExclusiveMode: (): Promise<boolean> => invoke<boolean>("get_exclusive_mode"),
+
+	// ========================================================================
+	// Reference Curves
+	// ========================================================================
+
+	/**
+	 * Get list of available reference curves
+	 */
+	getAvailableReferenceCurves: (): Promise<ReferenceCurveInfo[]> =>
+		invoke<ReferenceCurveInfo[]>("get_available_reference_curves"),
+
+	/**
+	 * Get a reference curve with specified number of points
+	 * @param curveType - Type of reference curve
+	 * @param numPoints - Number of frequency points (10-1024)
+	 */
+	getReferenceCurve: (curveType: ReferenceCurveType, numPoints = 256): Promise<ReferenceCurve> =>
+		invoke<ReferenceCurve>("get_reference_curve", { curveType, numPoints }),
+
+	/**
+	 * Get a reference curve at specific frequencies
+	 * @param curveType - Type of reference curve
+	 * @param frequencies - Array of frequencies to sample
+	 */
+	getReferenceCurveAtFrequencies: (
+		curveType: ReferenceCurveType,
+		frequencies: number[],
+	): Promise<ReferenceCurve> =>
+		invoke<ReferenceCurve>("get_reference_curve_at_frequencies", { curveType, frequencies }),
 };
 
-export type { AudioBackend, AudioDevice, AudioDeviceList, AudioState, SignalType };
+export type {
+	AudioBackend,
+	AudioDevice,
+	AudioDeviceList,
+	AudioState,
+	ReferenceCurve,
+	ReferenceCurveInfo,
+	ReferenceCurveType,
+	SignalType,
+	StoredTrace,
+	TraceSlot,
+} from "../types/audio";

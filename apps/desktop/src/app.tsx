@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { DeviceSelector } from "./components/device-selector";
 import { GeneratorControls } from "./components/generator-controls";
 import { SettingsDialog } from "./components/settings-dialog";
+import { SpectrogramDisplay } from "./components/spectrogram-display";
 import { SpectrumAnalyzer } from "./components/spectrum-analyzer";
 import { StatusBar } from "./components/status-bar";
 import { TransferFunctionDisplay } from "./components/transfer-function-display";
@@ -10,6 +11,7 @@ import { WebGLSpectrum } from "./components/webgl-spectrum";
 import { useAudioStore } from "./stores/audio-store";
 
 type SpectrumRenderer = "uplot" | "webgl";
+type SecondaryView = "transfer" | "spectrogram";
 
 export const App = () => {
 	const [theme, setTheme] = useState<"dark" | "light">(() => {
@@ -27,6 +29,14 @@ export const App = () => {
 			if (stored === "uplot" || stored === "webgl") return stored;
 		}
 		return "uplot";
+	});
+
+	const [secondaryView, setSecondaryView] = useState<SecondaryView>(() => {
+		if (typeof window !== "undefined") {
+			const stored = localStorage.getItem("phonetic-secondary-view");
+			if (stored === "transfer" || stored === "spectrogram") return stored;
+		}
+		return "transfer";
 	});
 
 	const [settingsOpen, setSettingsOpen] = useState(false);
@@ -83,6 +93,11 @@ export const App = () => {
 	useEffect(() => {
 		localStorage.setItem("phonetic-spectrum-renderer", spectrumRenderer);
 	}, [spectrumRenderer]);
+
+	// Persist secondary view preference
+	useEffect(() => {
+		localStorage.setItem("phonetic-secondary-view", secondaryView);
+	}, [secondaryView]);
 
 	// Spectrum polling loop
 	useEffect(() => {
@@ -289,13 +304,53 @@ export const App = () => {
 						</div>
 					</div>
 
-					{/* Transfer function display */}
-					<div className="glass rounded-lg p-4 flex-1 min-h-[300px]">
-						<TransferFunctionDisplay
-							data={transferFunctionData}
-							isRunning={isRunning}
-							onResetAveraging={resetAveraging}
-						/>
+					{/* Secondary view - Transfer function or Spectrogram */}
+					<div className="glass rounded-lg p-4 flex-1 min-h-[300px] flex flex-col">
+						{/* View toggle */}
+						<div className="flex items-center justify-end gap-2 mb-2 flex-shrink-0">
+							<span className="text-xs text-muted-foreground">View:</span>
+							<div className="flex rounded-md border border-border overflow-hidden">
+								<button
+									type="button"
+									onClick={() => setSecondaryView("transfer")}
+									className={`px-2 py-1 text-xs transition-colors ${
+										secondaryView === "transfer"
+											? "bg-primary text-primary-foreground"
+											: "bg-transparent text-muted-foreground hover:bg-muted"
+									}`}
+								>
+									Transfer Function
+								</button>
+								<button
+									type="button"
+									onClick={() => setSecondaryView("spectrogram")}
+									className={`px-2 py-1 text-xs transition-colors ${
+										secondaryView === "spectrogram"
+											? "bg-primary text-primary-foreground"
+											: "bg-transparent text-muted-foreground hover:bg-muted"
+									}`}
+								>
+									Spectrogram
+								</button>
+							</div>
+						</div>
+						{/* View content */}
+						<div className="flex-1 min-h-0">
+							{secondaryView === "transfer" ? (
+								<TransferFunctionDisplay
+									data={transferFunctionData}
+									isRunning={isRunning}
+									onResetAveraging={resetAveraging}
+								/>
+							) : (
+								<SpectrogramDisplay
+									spectrumData={spectrumData}
+									sampleRate={audioState?.sample_rate ?? 48000}
+									fftSize={fftSize}
+									isRunning={isRunning}
+								/>
+							)}
+						</div>
 					</div>
 				</div>
 			</main>
