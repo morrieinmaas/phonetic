@@ -44,6 +44,10 @@ jobs:
       - name: Rust format check
         run: cd apps/desktop/src-tauri && cargo fmt --check
 
+      # Build frontend first - Tauri's generate_context! macro requires dist folder to exist
+      - name: Build frontend
+        run: cd apps/desktop && bun run build
+
       - name: Rust clippy
         run: cd apps/desktop/src-tauri && cargo clippy --all-targets --all-features -- -D warnings
 
