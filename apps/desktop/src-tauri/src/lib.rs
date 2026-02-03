@@ -7,11 +7,13 @@ use tauri::Manager;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     env_logger::init();
+    println!("Phonetic starting up...");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
-            log::info!("Phonetic starting up...");
+            log::info!("Phonetic setup starting...");
+            println!("Phonetic setup starting...");
 
             // Initialize audio engine
             let audio_engine = audio::AudioEngine::new();
@@ -21,6 +23,8 @@ pub fn run() {
             let dsp_state = commands::DspState::new();
             app.manage(dsp_state);
 
+            log::info!("Phonetic setup complete");
+            println!("Phonetic setup complete");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

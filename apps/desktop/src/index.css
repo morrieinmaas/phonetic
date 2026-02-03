@@ -1,6 +1,7 @@
 @import "tailwindcss";
 
-@theme {
+/* Custom theme variables for backward compatibility */
+:root {
 	/* Color palette - Modern audio app aesthetic */
 	--color-background: oklch(0.14 0.01 260);
 	--color-foreground: oklch(0.95 0.01 260);

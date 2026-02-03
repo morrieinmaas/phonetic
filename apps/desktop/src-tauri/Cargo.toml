@@ -45,7 +45,7 @@ objc = "0.2"
 coreaudio-rs = "0.12"
 
 [features]
-default = ["custom-protocol"]
+default = []
 custom-protocol = ["tauri/custom-protocol"]
 
 [dev-dependencies]
