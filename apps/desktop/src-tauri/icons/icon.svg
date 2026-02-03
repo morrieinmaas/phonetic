@@ -1,0 +1,29 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- macOS icons need ~12% padding around content -->
+  <!-- Content area: 824x824 centered (100px padding on each side) -->
+
+  <!-- Main rounded square background (macOS style) - with proper inset -->
+  <rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="#12121a"/>
+
+  <!-- Subtle inner area for depth -->
+  <rect x="120" y="120" width="784" height="784" rx="165" ry="165" fill="#16162a"/>
+
+  <!-- Spectrum bars - properly centered within the smaller area -->
+  <!-- Bar 1 (leftmost) - purple -->
+  <rect x="220" y="533" width="77" height="210" rx="13" fill="#7c3aed"/>
+
+  <!-- Bar 2 - violet -->
+  <rect x="323" y="420" width="77" height="323" rx="13" fill="#8b5cf6"/>
+
+  <!-- Bar 3 (center, tallest) - cyan -->
+  <rect x="426" y="292" width="97" height="451" rx="15" fill="#06b6d4"/>
+
+  <!-- Bar 4 - blue -->
+  <rect x="549" y="356" width="77" height="387" rx="13" fill="#3b82f6"/>
+
+  <!-- Bar 5 (rightmost) - indigo -->
+  <rect x="652" y="453" width="77" height="290" rx="13" fill="#6366f1"/>
+
+  <!-- Subtle horizontal guide line -->
+  <line x1="190" y1="743" x2="759" y2="743" stroke="#ffffff" stroke-opacity="0.15" stroke-width="2.5"/>
+</svg>

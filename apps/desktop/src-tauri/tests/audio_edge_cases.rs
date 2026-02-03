@@ -70,7 +70,9 @@ fn test_window_functions_empty_buffer() {
 fn test_fft_clipping_signal() {
     let mut processor = FftProcessor::new(1024);
     // Full-scale clipped signal (worst case)
-    let clipped: Vec<f32> = (0..2048).map(|i| if i % 2 == 0 { 1.0 } else { -1.0 }).collect();
+    let clipped: Vec<f32> = (0..2048)
+        .map(|i| if i % 2 == 0 { 1.0 } else { -1.0 })
+        .collect();
     processor.process(&clipped);
     let mag = processor.get_magnitude_db();
     // Should produce valid output without overflow
@@ -556,21 +558,23 @@ fn test_coherence_always_bounded() {
     // Process with various signal combinations
     let signal1: Vec<f32> = (0..4096).map(|i| (i as f32 * 0.1).sin()).collect();
     let signal2: Vec<f32> = (0..4096).map(|i| (i as f32 * 0.17).sin()).collect();
-    let noise: Vec<f32> = (0..4096).map(|i| ((i as f32 * 0.37).sin() * 31.0) % 1.0).collect();
+    let noise: Vec<f32> = (0..4096)
+        .map(|i| ((i as f32 * 0.37).sin() * 31.0) % 1.0)
+        .collect();
 
     processor.process(&signal1, &signal1);
     let data1 = processor.get_data();
-    assert!(data1.coherence.iter().all(|&c| c >= 0.0 && c <= 1.0));
+    assert!(data1.coherence.iter().all(|&c| (0.0..=1.0).contains(&c)));
 
     processor.reset_averaging();
     processor.process(&signal1, &signal2);
     let data2 = processor.get_data();
-    assert!(data2.coherence.iter().all(|&c| c >= 0.0 && c <= 1.0));
+    assert!(data2.coherence.iter().all(|&c| (0.0..=1.0).contains(&c)));
 
     processor.reset_averaging();
     processor.process(&noise, &signal1);
     let data3 = processor.get_data();
-    assert!(data3.coherence.iter().all(|&c| c >= 0.0 && c <= 1.0));
+    assert!(data3.coherence.iter().all(|&c| (0.0..=1.0).contains(&c)));
 }
 
 // ============================================================================

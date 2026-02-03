@@ -535,7 +535,10 @@ mod tests {
             processor.process(&signal, &signal);
         }
 
-        assert!(processor.average_count() > 1, "Should have accumulated averages");
+        assert!(
+            processor.average_count() > 1,
+            "Should have accumulated averages"
+        );
 
         let data = processor.get_data();
         let bin_1k = (1000.0 / SAMPLE_RATE * FFT_SIZE as f32).round() as usize;
@@ -660,7 +663,7 @@ mod tests {
 
         let data = processor.get_data();
         for &coh in &data.coherence {
-            assert!(coh >= 0.0 && coh <= 1.0, "Coherence must be in [0, 1]");
+            assert!((0.0..=1.0).contains(&coh), "Coherence must be in [0, 1]");
         }
     }
 }

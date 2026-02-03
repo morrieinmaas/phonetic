@@ -669,10 +669,7 @@ mod tests {
         // Test that we can check exclusive mode status
         if let Some(device_id) = get_default_output_device() {
             let owner = get_exclusive_mode_owner(device_id);
-            println!(
-                "Exclusive mode owner for default output: {:?}",
-                owner
-            );
+            println!("Exclusive mode owner for default output: {:?}", owner);
             // Device should typically not be in exclusive mode during tests
             // (unless something else has acquired it)
         }

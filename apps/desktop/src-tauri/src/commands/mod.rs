@@ -60,7 +60,10 @@ pub fn get_audio_state(engine: State<'_, AudioEngine>) -> AudioState {
 }
 
 #[tauri::command]
-pub fn set_audio_backend(engine: State<'_, AudioEngine>, backend: AudioBackend) -> Result<(), String> {
+pub fn set_audio_backend(
+    engine: State<'_, AudioEngine>,
+    backend: AudioBackend,
+) -> Result<(), String> {
     engine.set_backend(backend)
 }
 

@@ -208,7 +208,11 @@ mod tests {
             let mut buffer = vec![1.0; size];
             apply_hann_window(&mut buffer);
             assert!(buffer[0] < 0.01, "Size {} start should be near zero", size);
-            assert!(buffer[size / 2] > 0.99, "Size {} center should be near 1.0", size);
+            assert!(
+                buffer[size / 2] > 0.99,
+                "Size {} center should be near 1.0",
+                size
+            );
         }
     }
 
@@ -249,7 +253,10 @@ mod tests {
     fn test_window_two_samples() {
         let mut hann = vec![1.0; 2];
         apply_hann_window(&mut hann);
-        assert!(hann[0] < 0.01 && hann[1] < 0.01, "Two-sample Hann endpoints near zero");
+        assert!(
+            hann[0] < 0.01 && hann[1] < 0.01,
+            "Two-sample Hann endpoints near zero"
+        );
 
         let mut hamming = vec![1.0; 2];
         apply_hamming_window(&mut hamming);

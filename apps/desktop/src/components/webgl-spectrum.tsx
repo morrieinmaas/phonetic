@@ -148,7 +148,7 @@ export const WebGLSpectrum = ({
 	void waterfallRowRef;
 
 	const [peakHoldEnabled, setPeakHoldEnabled] = useState(true);
-	const [peakClearTrigger, setPeakClearTrigger] = useState(0);
+	const skipPeakUntilRef = useRef(0); // Timestamp until which to skip peak updates
 
 	// Theme detection
 	const [theme, setTheme] = useState<"dark" | "light">(() =>
@@ -177,7 +177,7 @@ export const WebGLSpectrum = ({
 
 	const clearPeakHold = () => {
 		peakHoldRef.current = new Array(512).fill(-120);
-		setPeakClearTrigger((t) => t + 1);
+		skipPeakUntilRef.current = Date.now() + 1500; // Skip peak updates for 1.5s so user can see the clear
 	};
 
 	// Initialize WebGL
@@ -332,8 +332,8 @@ export const WebGLSpectrum = ({
 			}
 		}
 
-		// Update peak hold
-		if (peakHoldEnabled) {
+		// Update peak hold (skip if within cooldown after clear)
+		if (peakHoldEnabled && Date.now() > skipPeakUntilRef.current) {
 			for (let i = 0; i < logDbValues.length; i++) {
 				const currentPeak = peakHoldRef.current[i] ?? -120;
 				const currentValue = logDbValues[i] ?? -120;
@@ -395,13 +395,6 @@ export const WebGLSpectrum = ({
 			}
 		}
 	}, [spectrumData, sampleRate, fftSize, themeColors, peakHoldEnabled]);
-
-	// Force render when peak hold is cleared
-	useEffect(() => {
-		if (peakClearTrigger > 0) {
-			renderSpectrum();
-		}
-	}, [peakClearTrigger, renderSpectrum]);
 
 	// Handle resize
 	useEffect(() => {

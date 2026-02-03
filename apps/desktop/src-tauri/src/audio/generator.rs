@@ -326,7 +326,10 @@ mod tests {
 
         for _ in 0..100 {
             let sample = gen.next_sample();
-            assert!(sample.abs() < 0.001, "Zero amplitude should produce silence");
+            assert!(
+                sample.abs() < 0.001,
+                "Zero amplitude should produce silence"
+            );
         }
     }
 
@@ -340,7 +343,10 @@ mod tests {
         // Should still produce valid samples
         for _ in 0..100 {
             let sample = gen.next_sample();
-            assert!(sample.is_finite(), "Should produce finite samples at Nyquist");
+            assert!(
+                sample.is_finite(),
+                "Should produce finite samples at Nyquist"
+            );
         }
     }
 
@@ -407,7 +413,8 @@ mod tests {
 
         let samples: Vec<f32> = (0..10000).map(|_| gen.next_sample()).collect();
         let mean: f32 = samples.iter().sum::<f32>() / samples.len() as f32;
-        let variance: f32 = samples.iter().map(|&x| (x - mean).powi(2)).sum::<f32>() / samples.len() as f32;
+        let variance: f32 =
+            samples.iter().map(|&x| (x - mean).powi(2)).sum::<f32>() / samples.len() as f32;
 
         // Pink noise should have some variance (not all zeros)
         assert!(variance > 0.01, "Pink noise should have variance");

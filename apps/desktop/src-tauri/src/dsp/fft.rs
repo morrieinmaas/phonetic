@@ -224,8 +224,16 @@ mod tests {
         let bin2 = (freq2 / sample_rate * 2048.0).round() as usize;
 
         // Check that both bins have significant energy (above -60dB)
-        assert!(magnitude[bin1] > -60.0, "Bin {} should have significant energy", bin1);
-        assert!(magnitude[bin2] > -60.0, "Bin {} should have significant energy", bin2);
+        assert!(
+            magnitude[bin1] > -60.0,
+            "Bin {} should have significant energy",
+            bin1
+        );
+        assert!(
+            magnitude[bin2] > -60.0,
+            "Bin {} should have significant energy",
+            bin2
+        );
     }
 
     #[test]
@@ -321,10 +329,14 @@ mod tests {
 
         // Impulse should have flat spectrum
         let avg: f32 = magnitude.iter().sum::<f32>() / magnitude.len() as f32;
-        let variance: f32 = magnitude.iter().map(|&x| (x - avg).powi(2)).sum::<f32>() / magnitude.len() as f32;
+        let variance: f32 =
+            magnitude.iter().map(|&x| (x - avg).powi(2)).sum::<f32>() / magnitude.len() as f32;
 
         // Variance should be relatively low for flat spectrum
-        assert!(variance < 100.0, "Impulse spectrum should be relatively flat");
+        assert!(
+            variance < 100.0,
+            "Impulse spectrum should be relatively flat"
+        );
     }
 
     #[test]

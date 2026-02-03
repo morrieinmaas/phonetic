@@ -435,7 +435,10 @@ mod tests {
 
         // Above highest
         let above = cal.get_correction(15000.0);
-        assert!((above - (-1.0)).abs() < 0.01, "Should use highest correction");
+        assert!(
+            (above - (-1.0)).abs() < 0.01,
+            "Should use highest correction"
+        );
     }
 
     #[test]

@@ -29,13 +29,17 @@ fn bench_window_functions(c: &mut Criterion) {
             });
         });
 
-        group.bench_with_input(BenchmarkId::new("blackman_harris", size), size, |b, &size| {
-            let mut buffer = vec![1.0f32; size];
-            b.iter(|| {
-                buffer.fill(1.0);
-                apply_blackman_harris_window(black_box(&mut buffer));
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("blackman_harris", size),
+            size,
+            |b, &size| {
+                let mut buffer = vec![1.0f32; size];
+                b.iter(|| {
+                    buffer.fill(1.0);
+                    apply_blackman_harris_window(black_box(&mut buffer));
+                });
+            },
+        );
 
         group.bench_with_input(BenchmarkId::new("hamming", size), size, |b, &size| {
             let mut buffer = vec![1.0f32; size];
@@ -282,8 +286,10 @@ fn bench_reference_curves(c: &mut Criterion) {
                 &frequencies,
                 |b, frequencies| {
                     b.iter(|| {
-                        let _curve =
-                            black_box(ReferenceCurve::generate(*curve_type, black_box(frequencies)));
+                        let _curve = black_box(ReferenceCurve::generate(
+                            *curve_type,
+                            black_box(frequencies),
+                        ));
                     });
                 },
             );

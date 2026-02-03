@@ -365,10 +365,7 @@ mod tests {
         let at_1k = house_curve(1000.0);
         let at_16k = house_curve(16000.0);
 
-        assert!(
-            at_16k < at_1k - 1.0,
-            "House curve should roll off at 16kHz"
-        );
+        assert!(at_16k < at_1k - 1.0, "House curve should roll off at 16kHz");
     }
 
     #[test]
@@ -459,10 +456,7 @@ mod tests {
 
         assert_eq!(freqs.len(), 100);
         assert!((freqs[0] - 20.0).abs() < 0.01, "Should start at 20Hz");
-        assert!(
-            (freqs[99] - 20000.0).abs() < 1.0,
-            "Should end at 20kHz"
-        );
+        assert!((freqs[99] - 20000.0).abs() < 1.0, "Should end at 20kHz");
 
         // Should be monotonically increasing
         for i in 1..freqs.len() {
@@ -511,7 +505,10 @@ mod tests {
     #[test]
     fn test_curve_display_names() {
         assert_eq!(ReferenceCurveType::Flat.display_name(), "Flat");
-        assert_eq!(ReferenceCurveType::XCurve.display_name(), "X-Curve (Cinema)");
+        assert_eq!(
+            ReferenceCurveType::XCurve.display_name(),
+            "X-Curve (Cinema)"
+        );
         assert_eq!(
             ReferenceCurveType::Iso226_60Phon.display_name(),
             "ISO 226 (60 phon)"

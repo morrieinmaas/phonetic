@@ -47,7 +47,7 @@ export const SpectrumAnalyzer = ({
 	const logFreqsRef = useRef<number[]>([]);
 	const peakHoldRef = useRef<number[]>([]);
 	const [peakHoldEnabled, setPeakHoldEnabled] = useState(true);
-	const [peakClearTrigger, setPeakClearTrigger] = useState(0);
+	const skipPeakUntilRef = useRef(0); // Timestamp until which to skip peak updates
 	const [theme, setTheme] = useState<"dark" | "light">(() =>
 		document.documentElement.classList.contains("dark") ? "dark" : "light",
 	);
@@ -67,10 +67,10 @@ export const SpectrumAnalyzer = ({
 		peakHoldRef.current = new Array(512).fill(-120);
 	}, []);
 
-	// Clear peak hold - resets values and triggers chart update
+	// Clear peak hold - resets values and pauses accumulation briefly
 	const clearPeakHold = () => {
 		peakHoldRef.current = new Array(512).fill(-120);
-		setPeakClearTrigger((t) => t + 1);
+		skipPeakUntilRef.current = Date.now() + 750; // Skip peak updates for 1.5s so user can see the clear
 	};
 
 	// Create chart (recreate when theme changes)
@@ -197,8 +197,8 @@ export const SpectrumAnalyzer = ({
 			? mapToLogScale(spectrumData, sampleRate, fftSize, logFreqsRef.current)
 			: new Array(512).fill(-120);
 
-		// Update peak hold only when streaming
-		if (peakHoldEnabled && hasData) {
+		// Update peak hold only when streaming (skip if within cooldown after clear)
+		if (peakHoldEnabled && hasData && Date.now() > skipPeakUntilRef.current) {
 			for (let i = 0; i < logData.length; i++) {
 				const currentPeak = peakHoldRef.current[i] ?? -120;
 				const currentValue = logData[i] ?? -120;
@@ -220,13 +220,6 @@ export const SpectrumAnalyzer = ({
 	useEffect(() => {
 		updateChart();
 	}, [updateChart]);
-
-	// Force update when peak hold is cleared
-	useEffect(() => {
-		if (peakClearTrigger > 0) {
-			updateChart();
-		}
-	}, [peakClearTrigger, updateChart]);
 
 	return (
 		<div className="flex flex-col h-full min-h-0">
