@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
+import { useShallow } from "zustand/shallow";
 import { useTraceStore } from "../stores/trace-store";
 import type {
 	ReferenceCurve,
@@ -98,8 +99,9 @@ export const TransferFunctionDisplay = ({
 	const [refCurveData, setRefCurveData] = useState<ReferenceCurve | null>(null);
 
 	// Get visible traces from store (limited to display count)
-	const visibleTraces = useTraceStore((state) =>
-		state.traces.filter((t) => t.visible).slice(0, MAX_DISPLAYED_TRACES),
+	// useShallow prevents infinite re-renders by comparing array contents shallowly
+	const visibleTraces = useTraceStore(
+		useShallow((state) => state.traces.filter((t) => t.visible).slice(0, MAX_DISPLAYED_TRACES)),
 	);
 
 	// Watch for theme changes

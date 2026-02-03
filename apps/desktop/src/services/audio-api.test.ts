@@ -52,7 +52,7 @@ describe("audioApi", () => {
 				generator_active: false,
 				generator_type: null,
 				backend: "cpal" as const,
-				backend_available: ["cpal" as const, "coreaudio" as const],
+				backend_available: ["cpal" as const, "core_audio" as const],
 				exclusive_mode: false,
 			};
 			mockInvoke.mockResolvedValueOnce(mockState);
@@ -271,12 +271,12 @@ describe("audioApi", () => {
 			expect(mockInvoke).toHaveBeenCalledWith("set_audio_backend", { backend: "cpal" });
 		});
 
-		it("should call set_audio_backend with coreaudio", async () => {
+		it("should call set_audio_backend with core_audio", async () => {
 			mockInvoke.mockResolvedValueOnce(undefined);
 
-			await audioApi.setAudioBackend("coreaudio");
+			await audioApi.setAudioBackend("core_audio");
 
-			expect(mockInvoke).toHaveBeenCalledWith("set_audio_backend", { backend: "coreaudio" });
+			expect(mockInvoke).toHaveBeenCalledWith("set_audio_backend", { backend: "core_audio" });
 		});
 	});
 });

@@ -125,7 +125,7 @@ export const audioApi = {
 
 	/**
 	 * Set audio backend (requires stream to be stopped)
-	 * @param backend - Backend to use ("cpal" or "coreaudio")
+	 * @param backend - Backend to use ("cpal" or "core_audio")
 	 */
 	setAudioBackend: (backend: AudioBackend): Promise<void> =>
 		invoke("set_audio_backend", { backend }),

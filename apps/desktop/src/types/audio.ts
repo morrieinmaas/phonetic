@@ -17,7 +17,7 @@ export interface AudioDeviceList {
 }
 
 /** Audio backend type */
-export type AudioBackend = "cpal" | "coreaudio";
+export type AudioBackend = "cpal" | "core_audio";
 
 /** Current audio engine state */
 export interface AudioState {

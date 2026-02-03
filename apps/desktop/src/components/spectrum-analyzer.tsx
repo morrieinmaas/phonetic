@@ -47,6 +47,7 @@ export const SpectrumAnalyzer = ({
 	const logFreqsRef = useRef<number[]>([]);
 	const peakHoldRef = useRef<number[]>([]);
 	const [peakHoldEnabled, setPeakHoldEnabled] = useState(true);
+	const [peakClearTrigger, setPeakClearTrigger] = useState(0);
 	const [theme, setTheme] = useState<"dark" | "light">(() =>
 		document.documentElement.classList.contains("dark") ? "dark" : "light",
 	);
@@ -66,9 +67,10 @@ export const SpectrumAnalyzer = ({
 		peakHoldRef.current = new Array(512).fill(-120);
 	}, []);
 
-	// Clear peak hold when toggled off
+	// Clear peak hold - resets values and triggers chart update
 	const clearPeakHold = () => {
 		peakHoldRef.current = new Array(512).fill(-120);
+		setPeakClearTrigger((t) => t + 1);
 	};
 
 	// Create chart (recreate when theme changes)
@@ -187,12 +189,16 @@ export const SpectrumAnalyzer = ({
 
 	// Update chart data
 	const updateChart = useCallback(() => {
-		if (!chartRef.current || spectrumData.length === 0 || !isRunning) return;
+		if (!chartRef.current) return;
 
-		const logData = mapToLogScale(spectrumData, sampleRate, fftSize, logFreqsRef.current);
+		// Use current spectrum data or empty if not running/no data
+		const hasData = spectrumData.length > 0 && isRunning;
+		const logData = hasData
+			? mapToLogScale(spectrumData, sampleRate, fftSize, logFreqsRef.current)
+			: new Array(512).fill(-120);
 
-		// Update peak hold
-		if (peakHoldEnabled) {
+		// Update peak hold only when streaming
+		if (peakHoldEnabled && hasData) {
 			for (let i = 0; i < logData.length; i++) {
 				const currentPeak = peakHoldRef.current[i] ?? -120;
 				const currentValue = logData[i] ?? -120;
@@ -208,7 +214,7 @@ export const SpectrumAnalyzer = ({
 
 		const peakData = peakHoldEnabled ? [...peakHoldRef.current] : new Array(512).fill(-120);
 		chartRef.current.setData([logFreqsRef.current, logData, peakData]);
-	}, [spectrumData, sampleRate, fftSize, isRunning, peakHoldEnabled]);
+	}, [spectrumData, sampleRate, fftSize, isRunning, peakHoldEnabled, peakClearTrigger]);
 
 	useEffect(() => {
 		updateChart();

@@ -24,13 +24,18 @@ export const SettingsDialog = ({
 	const [isSaving, setIsSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
+	// Sync backend and exclusive mode only when audioState changes
 	useEffect(() => {
 		if (audioState) {
 			setSelectedBackend(audioState.backend);
 			setExclusiveMode(audioState.exclusive_mode);
 		}
+	}, [audioState]);
+
+	// Sync FFT size separately to avoid resetting backend
+	useEffect(() => {
 		setSelectedFftSize(currentFftSize);
-	}, [audioState, currentFftSize]);
+	}, [currentFftSize]);
 
 	if (!isOpen) return null;
 
@@ -38,7 +43,7 @@ export const SettingsDialog = ({
 		setSelectedBackend(backend);
 		setError(null);
 		try {
-			await audioApi.setAudioBackend(backend as "cpal" | "coreaudio");
+			await audioApi.setAudioBackend(backend as "cpal" | "core_audio");
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
 		}
@@ -116,7 +121,7 @@ export const SettingsDialog = ({
 					<fieldset className="space-y-2">
 						<legend className="text-sm font-medium text-foreground">Audio Backend</legend>
 						<p className="text-xs text-muted-foreground mb-2">
-							{selectedBackend === "coreaudio"
+							{selectedBackend === "core_audio"
 								? "CoreAudio: Lower latency (~2ms), macOS only"
 								: "CPAL: Cross-platform, higher latency (~10ms)"}
 						</p>
@@ -133,7 +138,7 @@ export const SettingsDialog = ({
 											: "border-border hover:bg-muted"
 									} disabled:opacity-50 disabled:cursor-not-allowed`}
 								>
-									{backend === "coreaudio" ? "CoreAudio" : "CPAL"}
+									{backend === "core_audio" ? "CoreAudio" : "CPAL"}
 								</button>
 							))}
 						</div>
@@ -142,41 +147,46 @@ export const SettingsDialog = ({
 						)}
 					</fieldset>
 
-					{/* Exclusive Mode (CoreAudio only) */}
-					{selectedBackend === "coreaudio" && (
-						<fieldset className="space-y-2">
-							<legend className="text-sm font-medium text-foreground">Exclusive Mode</legend>
-							<p className="text-xs text-muted-foreground mb-2">
-								Request exclusive device access for lowest latency. Other apps won't be able to use
-								the device while active.
-							</p>
-							<div className="flex items-center gap-3">
-								<button
-									type="button"
-									role="switch"
-									aria-checked={exclusiveMode}
-									aria-label="Toggle exclusive mode"
-									onClick={() => handleExclusiveModeChange(!exclusiveMode)}
-									disabled={audioState?.is_running}
-									className={`relative w-11 h-6 rounded-full transition-colors ${
-										exclusiveMode ? "bg-primary" : "bg-muted"
-									} disabled:opacity-50 disabled:cursor-not-allowed`}
-								>
-									<span
-										className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${
-											exclusiveMode ? "translate-x-5" : "translate-x-0"
-										}`}
-									/>
-								</button>
-								<span className="text-sm">{exclusiveMode ? "Enabled" : "Disabled"}</span>
-							</div>
-							{audioState?.is_running && (
-								<p className="text-xs text-yellow-500">
-									Stop audio stream to change exclusive mode
-								</p>
+					{/* Exclusive Mode (CoreAudio only) - always rendered to prevent layout shift */}
+					<fieldset
+						className={`space-y-2 transition-opacity ${selectedBackend !== "core_audio" ? "opacity-40 pointer-events-none" : ""}`}
+					>
+						<legend className="text-sm font-medium text-foreground">
+							Exclusive Mode
+							{selectedBackend !== "core_audio" && (
+								<span className="text-muted-foreground font-normal"> (CoreAudio only)</span>
 							)}
-						</fieldset>
-					)}
+						</legend>
+						<p className="text-xs text-muted-foreground mb-2">
+							Request exclusive device access for lowest latency. Other apps won't be able to use
+							the device while active.
+						</p>
+						<div className="flex items-center gap-3">
+							<button
+								type="button"
+								role="switch"
+								aria-checked={exclusiveMode}
+								aria-label="Toggle exclusive mode"
+								onClick={() => handleExclusiveModeChange(!exclusiveMode)}
+								disabled={audioState?.is_running || selectedBackend !== "core_audio"}
+								className={`relative w-11 h-6 rounded-full transition-colors ${
+									exclusiveMode && selectedBackend === "core_audio" ? "bg-primary" : "bg-muted"
+								} disabled:opacity-50 disabled:cursor-not-allowed`}
+							>
+								<span
+									className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${
+										exclusiveMode && selectedBackend === "core_audio" ? "translate-x-5" : "translate-x-0"
+									}`}
+								/>
+							</button>
+							<span className="text-sm">{exclusiveMode && selectedBackend === "core_audio" ? "Enabled" : "Disabled"}</span>
+						</div>
+						{audioState?.is_running && selectedBackend === "core_audio" && (
+							<p className="text-xs text-yellow-500">
+								Stop audio stream to change exclusive mode
+							</p>
+						)}
+					</fieldset>
 
 					{/* FFT Size */}
 					<fieldset className="space-y-2">
@@ -230,14 +240,12 @@ export const SettingsDialog = ({
 										{(audioState.sample_rate / selectedFftSize).toFixed(2)} Hz/bin
 									</span>
 								</div>
-								{selectedBackend === "coreaudio" && (
-									<div className="flex justify-between">
-										<span className="text-muted-foreground">Exclusive Mode:</span>
-										<span className={exclusiveMode ? "text-green-500" : "text-muted-foreground"}>
-											{exclusiveMode ? "Active" : "Disabled"}
-										</span>
-									</div>
-								)}
+								<div className={`flex justify-between ${selectedBackend !== "core_audio" ? "opacity-40" : ""}`}>
+								<span className="text-muted-foreground">Exclusive Mode:</span>
+								<span className={exclusiveMode && selectedBackend === "core_audio" ? "text-green-500" : "text-muted-foreground"}>
+									{exclusiveMode && selectedBackend === "core_audio" ? "Active" : "Disabled"}
+								</span>
+							</div>
 							</div>
 						</div>
 					)}

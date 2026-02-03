@@ -22,8 +22,18 @@ export const ReferenceCurveSelector = ({
 	const [availableCurves, setAvailableCurves] = useState<ReferenceCurveInfo[]>([]);
 	const [isLoading, setIsLoading] = useState(false);
 
-	// Fetch available curves on mount
+	// Fetch available curves on mount (wait for Tauri to be ready)
 	useEffect(() => {
+		// Check if Tauri runtime is available
+		if (!window.__TAURI_INTERNALS__) {
+			// Retry after a short delay if Tauri isn't ready yet
+			const timer = setTimeout(() => {
+				if (window.__TAURI_INTERNALS__) {
+					audioApi.getAvailableReferenceCurves().then(setAvailableCurves).catch(console.error);
+				}
+			}, 100);
+			return () => clearTimeout(timer);
+		}
 		audioApi.getAvailableReferenceCurves().then(setAvailableCurves).catch(console.error);
 	}, []);
 

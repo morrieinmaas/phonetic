@@ -131,12 +131,12 @@ impl AudioEngine {
         let backend_name = match current_backend {
             AudioBackend::Cpal => "cpal",
             #[cfg(target_os = "macos")]
-            AudioBackend::CoreAudio => "coreaudio",
+            AudioBackend::CoreAudio => "core_audio",
         };
 
         let mut available = vec!["cpal".to_string()];
         #[cfg(target_os = "macos")]
-        available.push("coreaudio".to_string());
+        available.push("core_audio".to_string());
 
         AudioState {
             is_running: self.is_running.load(Ordering::Acquire),
