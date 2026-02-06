@@ -146,21 +146,32 @@ test-ts-coverage:
 
 # Build macOS app bundle (.app)
 dist-app: build-frontend
-    cd {{desktop}} && bunx tauri build --bundles app
+    cd {{desktop}} && bunx tauri build
 
-# Build macOS disk image (.dmg)
-dist-dmg: build-frontend
-    cd {{desktop}} && bunx tauri build --bundles dmg
-
-# Build universal macOS binary (Intel + Apple Silicon)
-dist-universal: build-frontend
-    cd {{desktop}} && bunx tauri build --target universal-apple-darwin
+# Build macOS disk image (.dmg) from the .app bundle
+dist-dmg: dist-app
+    #!/usr/bin/env zsh
+    set -euo pipefail
+    APP="{{tauri}}/target/release/bundle/macos/Phonetic.app"
+    VERSION=$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")
+    ARCH=$(uname -m)
+    DMG_DIR="{{tauri}}/target/release/bundle/dmg"
+    DMG="$DMG_DIR/Phonetic_${VERSION}_${ARCH}.dmg"
+    mkdir -p "$DMG_DIR"
+    rm -f "$DMG"
+    echo "Ad-hoc signing $APP..."
+    codesign --force --deep --sign - "$APP"
+    codesign --verify "$APP" && echo "Signature valid"
+    echo "Creating DMG from $APP..."
+    hdiutil create -volname "Phonetic" -srcfolder "$APP" -ov -format UDZO "$DMG"
+    xattr -cr "$DMG"
+    echo "DMG ready: $DMG ($(du -h "$DMG" | cut -f1))"
 
 # Show built artifacts
 dist-show:
     @echo "Built artifacts:"
-    @ls -la {{tauri}}/target/release/bundle/ 2>/dev/null || echo "No release builds. Run 'just dist-app' first."
-    @ls -la {{tauri}}/target/debug/bundle/ 2>/dev/null || echo "No debug builds."
+    @ls -lh {{tauri}}/target/release/bundle/macos/*.app 2>/dev/null || echo "No .app builds."
+    @ls -lh {{tauri}}/target/release/bundle/dmg/*.dmg 2>/dev/null || echo "No .dmg builds."
 
 # ============================================================================
 # CI Pipeline (used by GitHub Actions)
@@ -191,7 +202,7 @@ ci: ci-install ci-check ci-test ci-build
 # ============================================================================
 
 # Full release: check, test, build
-release: check test dist-universal
+release: check test dist-dmg
     @echo "Release build complete!"
     just dist-show
 
