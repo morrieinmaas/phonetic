@@ -1,5 +1,6 @@
 mod calibration;
 mod delay_finder;
+mod diagnostics;
 mod export;
 mod fft;
 mod impulse_response;
@@ -9,6 +10,7 @@ mod windows;
 
 pub use calibration::*;
 pub use delay_finder::*;
+pub use diagnostics::*;
 pub use export::*;
 pub use fft::*;
 pub use impulse_response::*;
