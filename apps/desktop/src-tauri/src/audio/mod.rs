@@ -1,3 +1,4 @@
+mod deinterleave;
 mod devices;
 mod engine;
 mod generator;
@@ -7,6 +8,7 @@ mod realtime;
 #[cfg(target_os = "macos")]
 pub mod coreaudio_backend;
 
+pub use deinterleave::*;
 pub use devices::*;
 pub use engine::*;
 pub use generator::*;
