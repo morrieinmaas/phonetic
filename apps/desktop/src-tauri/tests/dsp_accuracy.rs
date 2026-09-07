@@ -366,44 +366,83 @@ fn displayed_phase_is_wrapped_to_plus_minus_180() {
     }
 }
 
-/// A quiet reference must give the same impulse response as a loud one. With an
-/// absolute regularisation epsilon it does not: the epsilon swamps the signal.
+/// A quiet reference must give the same recovered impulse response as a loud
+/// one. A *flat-spectrum* reference (a unit impulse) cannot expose this: its
+/// |X(f)| is a frequency-independent constant, so any epsilon just rescales
+/// the whole recovered spectrum by one scalar, and a scale-invariant metric
+/// like RT60 (built on an EDC normalised to its own peak) never sees it. So
+/// this reference is spectrally *shaped* instead — white noise through the
+/// same one-pole lowpass as `one_pole_lowpass_matches_closed_form_response` —
+/// which makes an absolute epsilon suppress its weak high-frequency bins
+/// disproportionately, smearing the recovered impulse response. The "system"
+/// is a pure sample delay (applied as a circular shift, matching what a
+/// deconvolution over one FFT block actually assumes), so the ideal recovered
+/// response is a clean spike at a known index and any epsilon-driven leakage
+/// shows up as blur around it.
 #[test]
 fn impulse_response_is_independent_of_reference_level() {
     const N: usize = 16_384;
-    let t60_ms = 200.0_f32;
+    let delay_samples = 1000;
+    let a = 0.97_f32;
 
-    let decay = |raw: &[f32], gain: f32| -> Vec<f32> {
-        raw.iter()
-            .enumerate()
-            .map(|(i, s)| {
-                let t_ms = i as f32 * 1000.0 / FS;
-                s * 10f32.powf(-3.0 * t_ms / t60_ms) * gain
-            })
-            .collect()
-    };
+    let raw = noise(N, 20);
+    let mut prev = 0.0;
+    let shaped: Vec<f32> = raw
+        .iter()
+        .map(|s| {
+            prev = a * prev + (1.0 - a) * s;
+            prev
+        })
+        .collect();
 
-    let raw = noise(N, 16);
-    let mut rt60s = Vec::new();
+    let mut normalised_irs = Vec::new();
+    let mut peak_indices = Vec::new();
 
     // Same system, reference 60 dB apart in level.
     for gain in [1.0_f32, 0.001] {
-        let mut reference = vec![0.0; N];
-        reference[0] = gain;
-        let measured = decay(&raw, gain);
+        let reference: Vec<f32> = shaped.iter().map(|s| s * gain).collect();
+        let mut measured = reference.clone();
+        measured.rotate_right(delay_samples);
 
         let mut ir = ImpulseResponseProcessor::new(N, FS);
         ir.start_capture();
         ir.add_samples(&reference, &measured);
         let data = ir.compute_impulse_response().expect("IR should compute");
-        rt60s.push(data.rt60_ms.expect("RT60 should be estimated"));
+
+        let (peak_idx, peak_val) = data
+            .samples
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.abs().partial_cmp(&b.1.abs()).unwrap())
+            .map(|(i, &v)| (i, v))
+            .expect("IR should be non-empty");
+        peak_indices.push(peak_idx);
+        normalised_irs.push(
+            data.samples
+                .iter()
+                .map(|&s| s / peak_val)
+                .collect::<Vec<f32>>(),
+        );
     }
 
-    let delta_pct = (rt60s[0] - rt60s[1]).abs() / rt60s[0] * 100.0;
+    assert_eq!(
+        peak_indices[0], peak_indices[1],
+        "recovered delay moved between reference levels: {} vs {} samples",
+        peak_indices[0], peak_indices[1]
+    );
+
+    // Compare the normalised shapes in a window around the peak, where
+    // epsilon-driven smearing of the spike shows up.
+    let window = peak_indices[0].saturating_sub(100)..(peak_indices[0] + 300).min(N);
+    let worst: f32 = window
+        .clone()
+        .map(|i| (normalised_irs[0][i] - normalised_irs[1][i]).abs())
+        .fold(0.0, f32::max);
+
     assert!(
-        delta_pct < 5.0,
-        "RT60 differed by {delta_pct:.1}% between reference levels ({:.1} vs {:.1} ms)",
-        rt60s[0],
-        rt60s[1]
+        worst < 0.05,
+        "normalised impulse responses differ by {worst:.3} around the peak (samples {}..{}) between reference levels",
+        window.start,
+        window.end
     );
 }
