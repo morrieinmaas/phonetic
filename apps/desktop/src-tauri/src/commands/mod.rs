@@ -404,6 +404,15 @@ pub fn get_reference_curve_at_frequencies(
     ReferenceCurve::generate(curve_type, &frequencies)
 }
 
+#[tauri::command]
+pub fn measure_wav_file(
+    path: String,
+    reference_channel: usize,
+    measurement_channel: usize,
+) -> Result<TransferFunctionData, String> {
+    crate::audio::measure_from_file(&path, reference_channel, measurement_channel)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

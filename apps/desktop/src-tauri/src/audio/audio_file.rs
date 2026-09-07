@@ -89,3 +89,30 @@ pub fn write_wav(path: &str, channels: &[Vec<f32>], sample_rate: f32) -> Result<
         .finalize()
         .map_err(|e| format!("finalize {path}: {e}"))
 }
+
+use crate::dsp::{TransferFunctionData, TransferFunctionProcessor};
+
+/// Measure a transfer function from two channels of a WAV file.
+pub fn measure_from_file(
+    path: &str,
+    reference_channel: usize,
+    measurement_channel: usize,
+) -> Result<TransferFunctionData, String> {
+    let file = read_wav(path)?;
+
+    let channel = |i: usize| -> Result<&Vec<f32>, String> {
+        file.channels.get(i).ok_or_else(|| {
+            format!(
+                "{path} has {} channels, no channel {i}",
+                file.channels.len()
+            )
+        })
+    };
+
+    let reference = channel(reference_channel)?;
+    let measurement = channel(measurement_channel)?;
+
+    let mut processor = TransferFunctionProcessor::new(4096, file.sample_rate);
+    processor.process(measurement, reference);
+    Ok(processor.get_data())
+}

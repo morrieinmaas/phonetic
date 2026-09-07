@@ -69,6 +69,8 @@ pub fn run() {
             commands::get_available_reference_curves,
             commands::get_reference_curve,
             commands::get_reference_curve_at_frequencies,
+            // Offline WAV file analysis
+            commands::measure_wav_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

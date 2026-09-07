@@ -60,3 +60,51 @@ fn channel_length_mismatch_is_rejected() {
     let err = write_wav(&path, &[vec![0.0; 10], vec![0.0; 5]], 48_000.0);
     assert!(err.is_err(), "ragged channels must be rejected");
 }
+
+use phonetic_lib::audio::measure_from_file;
+
+/// End to end: synthesise a two-channel file whose second channel is the first
+/// attenuated by exactly 6 dB, write it, measure it back.
+#[test]
+fn measuring_a_file_recovers_a_known_gain() {
+    let path = tmp("phonetic_measure.wav");
+    let reference: Vec<f32> = (0..48_000 * 4)
+        .map(|i| {
+            let mut s = (i as u32).wrapping_mul(2_654_435_761);
+            s ^= s >> 16;
+            (s as f32 / u32::MAX as f32) * 2.0 - 1.0
+        })
+        .collect();
+    let measurement: Vec<f32> = reference.iter().map(|s| s * 0.5).collect();
+
+    write_wav(&path, &[reference, measurement], 48_000.0).unwrap();
+
+    let data = measure_from_file(&path, 0, 1).expect("measurement should succeed");
+
+    let mid: Vec<f32> = data
+        .frequencies
+        .iter()
+        .zip(&data.magnitude_db)
+        .filter(|(f, _)| (500.0..10_000.0).contains(*f))
+        .map(|(_, m)| *m)
+        .collect();
+    let mean = mid.iter().sum::<f32>() / mid.len() as f32;
+
+    assert!(
+        (mean - (-6.0206)).abs() < 0.5,
+        "expected -6.02 dB from the file, got {mean:.3} dB"
+    );
+
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn measuring_a_missing_channel_is_an_error() {
+    let path = tmp("phonetic_onechannel.wav");
+    write_wav(&path, &[vec![0.1; 1000]], 48_000.0).unwrap();
+    assert!(
+        measure_from_file(&path, 0, 1).is_err(),
+        "channel 1 does not exist"
+    );
+    std::fs::remove_file(&path).ok();
+}
