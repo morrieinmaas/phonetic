@@ -74,6 +74,8 @@ pub fn run() {
             commands::get_reference_curve_at_frequencies,
             // Offline WAV file analysis
             commands::measure_wav_file,
+            // Virtual EQ commands
+            commands::predict_eq,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

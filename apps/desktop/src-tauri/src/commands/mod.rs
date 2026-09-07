@@ -6,9 +6,9 @@ use crate::audio::{
 use crate::dsp::{
     export_impulse_response_csv, export_impulse_response_json, export_impulse_response_txt,
     export_transfer_function_csv, export_transfer_function_json, export_transfer_function_txt,
-    generate_standard_frequencies, write_to_file, DelayFinder, DelayResult, ExportFormat,
-    ImpulseResponseData, ImpulseResponseProcessor, MeasurementMetadata, MicrophoneCalibration,
-    ReferenceCurve, ReferenceCurveType, SplCalculator, TransferFunctionData,
+    generate_standard_frequencies, predict_with_eq, write_to_file, BiquadFilter, DelayFinder,
+    DelayResult, ExportFormat, ImpulseResponseData, ImpulseResponseProcessor, MeasurementMetadata,
+    MicrophoneCalibration, ReferenceCurve, ReferenceCurveType, SplCalculator, TransferFunctionData,
 };
 use parking_lot::Mutex;
 
@@ -426,6 +426,15 @@ pub fn measure_wav_file(
     measurement_channel: usize,
 ) -> Result<TransferFunctionData, String> {
     crate::audio::measure_from_file(&path, reference_channel, measurement_channel)
+}
+
+#[tauri::command]
+pub fn predict_eq(
+    trace: TransferFunctionData,
+    filters: Vec<BiquadFilter>,
+    sample_rate: f32,
+) -> TransferFunctionData {
+    predict_with_eq(&trace, &filters, sample_rate)
 }
 
 #[cfg(test)]
