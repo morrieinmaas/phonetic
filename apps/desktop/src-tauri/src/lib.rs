@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod cli;
 mod commands;
 pub mod dsp;
 

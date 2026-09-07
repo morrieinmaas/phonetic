@@ -41,6 +41,9 @@ rand = { version = "0.8", features = ["small_rng"] }
 log = "0.4"
 env_logger = "0.11"
 
+# CLI argument parsing
+clap = { version = "4", features = ["derive"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26"
 objc = "0.2"
@@ -57,6 +60,10 @@ criterion = { version = "0.5", features = ["html_reports"] }
 [[bench]]
 name = "dsp_benchmarks"
 harness = false
+
+[[bin]]
+name = "phonetic-cli"
+path = "src/bin/cli.rs"
 
 [profile.release]
 lto = true
