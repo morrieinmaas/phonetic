@@ -446,3 +446,83 @@ fn impulse_response_is_independent_of_reference_level() {
         window.end
     );
 }
+
+// ---------------------------------------------------------------------------
+// Multi-time-window
+// ---------------------------------------------------------------------------
+
+/// The whole point of multi-time-window: a closed-form filter recovered accurately
+/// at 25 Hz, where a single 4096-point FFT has only two bins below 25 Hz and cannot.
+#[test]
+fn multi_window_resolves_low_frequencies_a_single_fft_cannot() {
+    let a = 0.9_f32;
+    let x = noise(65_536 * 8, 20);
+
+    let mut prev = 0.0;
+    let y: Vec<f32> = x
+        .iter()
+        .map(|s| {
+            prev = a * prev + (1.0 - a) * s;
+            prev
+        })
+        .collect();
+
+    let mut mw = phonetic_lib::dsp::MultiWindowProcessor::new(FS);
+    mw.process(&y, &x);
+    let d = mw.get_data();
+
+    let mut worst = 0.0_f32;
+    for (i, &f) in d.frequencies.iter().enumerate() {
+        if !(25.0..=15_000.0).contains(&f) {
+            continue;
+        }
+        let w = 2.0 * PI * f / FS;
+        let (re, im) = (1.0 - a * w.cos(), a * w.sin());
+        let expect = 20.0 * ((1.0 - a) / (re * re + im * im).sqrt()).log10();
+        worst = worst.max((d.magnitude_db[i] - expect).abs());
+    }
+
+    assert!(worst < 1.0, "worst magnitude error {worst:.3} dB across 25 Hz-15 kHz");
+}
+
+#[test]
+fn multi_window_output_is_on_the_log_axis() {
+    let x = noise(65_536 * 2, 21);
+    let mut mw = phonetic_lib::dsp::MultiWindowProcessor::new(FS);
+    mw.process(&x, &x);
+    let d = mw.get_data();
+
+    assert!(d.frequencies[0] >= 19.0 && d.frequencies[0] <= 21.0);
+    assert_eq!(d.frequencies.len(), d.magnitude_db.len());
+    assert_eq!(d.frequencies.len(), d.coherence.len());
+    assert_eq!(d.frequencies.len(), d.phase_deg.len());
+    assert_eq!(d.frequencies.len(), d.group_delay_ms.len());
+}
+
+#[test]
+fn smoothing_setting_is_applied_to_multi_window_output() {
+    use phonetic_lib::dsp::{MultiWindowProcessor, SmoothingFraction};
+
+    let x = noise(65_536 * 2, 22);
+    let n = noise(65_536 * 2, 23);
+    let y: Vec<f32> = x.iter().zip(&n).map(|(s, e)| s + e * 0.3).collect();
+
+    let mut raw = MultiWindowProcessor::new(FS);
+    raw.process(&y, &x);
+
+    let mut smoothed = MultiWindowProcessor::new(FS);
+    smoothed.set_smoothing(SmoothingFraction::Octave6);
+    smoothed.process(&y, &x);
+
+    // Bin-to-bin variation must fall once smoothing is on.
+    let roughness = |v: &[f32]| -> f32 {
+        v.windows(2).map(|w| (w[1] - w[0]).abs()).sum::<f32>() / (v.len() - 1) as f32
+    };
+
+    let r_raw = roughness(&raw.get_data().magnitude_db);
+    let r_smooth = roughness(&smoothed.get_data().magnitude_db);
+    assert!(
+        r_smooth < r_raw * 0.7,
+        "smoothing should reduce roughness: raw {r_raw:.4}, smoothed {r_smooth:.4}"
+    );
+}

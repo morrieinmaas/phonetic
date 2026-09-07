@@ -64,6 +64,10 @@ pub struct TransferFunctionProcessor {
     coherence: Vec<f32>,
     group_delay_ms: Vec<f32>,
     frequencies: Vec<f32>,
+
+    /// Complex transfer function H = Sxy / Sxx, retained so multi-resolution
+    /// stitching and smoothing can work in the complex domain.
+    h: Vec<Complex<f32>>,
 }
 
 impl TransferFunctionProcessor {
@@ -105,6 +109,7 @@ impl TransferFunctionProcessor {
             coherence: vec![0.0; spectrum_len],
             group_delay_ms: vec![0.0; spectrum_len],
             frequencies,
+            h: vec![Complex::new(0.0, 0.0); spectrum_len],
         }
     }
 
@@ -214,6 +219,7 @@ impl TransferFunctionProcessor {
             } else {
                 Complex::new(0.0, 0.0)
             };
+            self.h[i] = h;
 
             // Magnitude in dB
             let mag = h.norm();
@@ -313,6 +319,11 @@ impl TransferFunctionProcessor {
         &self.group_delay_ms
     }
 
+    /// Complex transfer function per bin.
+    pub fn h(&self) -> &[Complex<f32>] {
+        &self.h
+    }
+
     /// Reset averaging and clear accumulated data
     pub fn reset_averaging(&mut self) {
         self.sxx_sum.iter_mut().for_each(|v| *v = 0.0);
@@ -326,6 +337,7 @@ impl TransferFunctionProcessor {
         self.phase_unwrapped_deg.iter_mut().for_each(|v| *v = 0.0);
         self.coherence.iter_mut().for_each(|v| *v = 0.0);
         self.group_delay_ms.iter_mut().for_each(|v| *v = 0.0);
+        self.h.iter_mut().for_each(|v| *v = Complex::new(0.0, 0.0));
         self.input_accumulator.clear();
         self.ref_accumulator.clear();
         // Priming the reference with `delay_samples` zeros delays it by exactly that
@@ -383,7 +395,6 @@ impl TransferFunctionProcessor {
     }
 
     /// Get current FFT size
-    #[allow(dead_code)]
     pub fn fft_size(&self) -> usize {
         self.fft_size
     }
@@ -728,6 +739,29 @@ mod tests {
         let data = processor.get_data();
         for &coh in &data.coherence {
             assert!((0.0..=1.0).contains(&coh), "Coherence must be in [0, 1]");
+        }
+    }
+
+    #[test]
+    fn complex_h_agrees_with_magnitude_and_phase() {
+        let mut processor = TransferFunctionProcessor::new(1024, 48000.0);
+        let x: Vec<f32> = (0..8192)
+            .map(|i| ((i * 7919) % 2003) as f32 / 1000.0 - 1.0)
+            .collect();
+        let y: Vec<f32> = x.iter().map(|s| s * 0.5).collect();
+        processor.process(&y, &x);
+
+        let h = processor.h();
+        let mag = processor.get_magnitude_db();
+        assert_eq!(h.len(), mag.len());
+
+        for i in 10..100 {
+            let from_complex = 20.0 * h[i].norm().log10();
+            assert!(
+                (from_complex - mag[i]).abs() < 0.01,
+                "bin {i}: complex says {from_complex:.3} dB, magnitude_db says {:.3}",
+                mag[i]
+            );
         }
     }
 }
