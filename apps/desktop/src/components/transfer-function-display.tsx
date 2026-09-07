@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import { useShallow } from "zustand/shallow";
+import { interpolatePhaseToLogScale } from "../lib/phase-interpolation";
 import {
 	type CursorSample,
 	applyPan,
@@ -437,7 +438,7 @@ export const TransferFunctionDisplay = ({
 				: new Array(numPoints).fill(null);
 		const logPhase =
 			data && isRunning
-				? mapToLogScale(data.phase_deg, data.frequencies, logFreqs)
+				? interpolatePhaseToLogScale(data.phase_deg, data.frequencies, logFreqs, mapToLogScale)
 				: new Array(numPoints).fill(null);
 		const refCurveValues = getRefCurveValues();
 
