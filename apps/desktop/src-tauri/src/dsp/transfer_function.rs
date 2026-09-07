@@ -58,6 +58,9 @@ pub struct TransferFunctionProcessor {
     // Output data
     magnitude_db: Vec<f32>,
     phase_deg: Vec<f32>,
+    /// Unwrapped phase in degrees. Internal only: group delay needs continuous
+    /// phase, but `phase_deg` is what gets displayed and must stay wrapped.
+    phase_unwrapped_deg: Vec<f32>,
     coherence: Vec<f32>,
     group_delay_ms: Vec<f32>,
     frequencies: Vec<f32>,
@@ -98,6 +101,7 @@ impl TransferFunctionProcessor {
             max_averages: DEFAULT_MAX_AVERAGES,
             magnitude_db: vec![-120.0; spectrum_len],
             phase_deg: vec![0.0; spectrum_len],
+            phase_unwrapped_deg: vec![0.0; spectrum_len],
             coherence: vec![0.0; spectrum_len],
             group_delay_ms: vec![0.0; spectrum_len],
             frequencies,
@@ -233,7 +237,9 @@ impl TransferFunctionProcessor {
                 }
             }
             prev_unwrapped_phase = unwrapped_phase;
-            self.phase_deg[i] = unwrapped_phase * 180.0 / PI;
+            self.phase_unwrapped_deg[i] = unwrapped_phase * 180.0 / PI;
+            // Displayed phase stays wrapped: `arg()` already returns [-pi, pi].
+            self.phase_deg[i] = phase_rad * 180.0 / PI;
 
             // Coherence γ² = |Sxy|² / (Sxx * Syy)
             let coherence_denom = sxx * syy;
@@ -257,16 +263,16 @@ impl TransferFunctionProcessor {
             if i == 0 || i == self.group_delay_ms.len() - 1 {
                 // Edge cases: use one-sided difference
                 let phase_diff = if i == 0 {
-                    self.phase_deg[1] - self.phase_deg[0]
+                    self.phase_unwrapped_deg[1] - self.phase_unwrapped_deg[0]
                 } else {
-                    self.phase_deg[i] - self.phase_deg[i - 1]
+                    self.phase_unwrapped_deg[i] - self.phase_unwrapped_deg[i - 1]
                 };
                 // Convert phase difference (degrees) to group delay (ms)
                 // τg = -dφ/dω = -(dφ_deg / df) / 360
                 self.group_delay_ms[i] = -phase_diff / (360.0 * freq_resolution) * 1000.0;
             } else {
                 // Central difference
-                let phase_diff = self.phase_deg[i + 1] - self.phase_deg[i - 1];
+                let phase_diff = self.phase_unwrapped_deg[i + 1] - self.phase_unwrapped_deg[i - 1];
                 self.group_delay_ms[i] = -phase_diff / (2.0 * 360.0 * freq_resolution) * 1000.0;
             }
         }
@@ -317,6 +323,7 @@ impl TransferFunctionProcessor {
         self.average_count = 0;
         self.magnitude_db.iter_mut().for_each(|v| *v = -120.0);
         self.phase_deg.iter_mut().for_each(|v| *v = 0.0);
+        self.phase_unwrapped_deg.iter_mut().for_each(|v| *v = 0.0);
         self.coherence.iter_mut().for_each(|v| *v = 0.0);
         self.group_delay_ms.iter_mut().for_each(|v| *v = 0.0);
         self.input_accumulator.clear();

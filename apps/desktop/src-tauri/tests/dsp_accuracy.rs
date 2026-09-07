@@ -343,3 +343,25 @@ fn rt60_recovers_a_synthesised_decay() {
         "synthesised T60 was {t60_ms} ms, estimator said {rt60:.1} ms ({error_pct:.1}% off)"
     );
 }
+
+/// Displayed phase must be wrapped to [-180, 180], as every reference analyzer shows
+/// it. A 10 ms delay accumulates thousands of degrees if left unwrapped.
+#[test]
+fn displayed_phase_is_wrapped_to_plus_minus_180() {
+    let delay_samples = 480;
+    let x = noise(FFT * FRAMES, 15);
+    let mut y = vec![0.0; x.len()];
+    y[delay_samples..].copy_from_slice(&x[..x.len() - delay_samples]);
+
+    let d = measure(&y, &x);
+
+    for i in band(100.0, 15_000.0) {
+        assert!(
+            d.phase_deg[i] >= -180.5 && d.phase_deg[i] <= 180.5,
+            "bin {} ({:.0} Hz): phase {:.1} deg is outside [-180, 180]",
+            i,
+            d.frequencies[i],
+            d.phase_deg[i]
+        );
+    }
+}
