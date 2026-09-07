@@ -6,7 +6,9 @@
 //! constant resolution in *octaves* rather than in hertz, which is how hearing and
 //! loudspeaker behaviour actually work.
 
-use crate::dsp::{TransferFunctionData, TransferFunctionProcessor};
+use crate::dsp::{
+    smooth_complex, SmoothingFraction, TransferFunctionData, TransferFunctionProcessor,
+};
 use realfft::num_complex::Complex;
 
 /// Output resolution of the stitched axis. 48 per octave is finer than any display
@@ -137,6 +139,7 @@ pub struct MultiWindowProcessor {
     /// Index into `processors` for each output frequency, precomputed.
     source: Vec<usize>,
     sample_rate: f32,
+    smoothing: SmoothingFraction,
 }
 
 impl MultiWindowProcessor {
@@ -164,7 +167,16 @@ impl MultiWindowProcessor {
             frequencies,
             source,
             sample_rate,
+            smoothing: SmoothingFraction::None,
         }
+    }
+
+    pub fn set_smoothing(&mut self, fraction: SmoothingFraction) {
+        self.smoothing = fraction;
+    }
+
+    pub fn smoothing(&self) -> SmoothingFraction {
+        self.smoothing
     }
 
     /// Feed the same samples to every resolution. Each keeps its own accumulator
@@ -210,18 +222,24 @@ impl MultiWindowProcessor {
         let mut phase_deg = vec![0.0; n];
         let mut coherence = vec![0.0; n];
 
+        let mut stitched = vec![Complex::new(0.0, 0.0); n];
         for i in 0..n {
             let p = &self.processors[self.source[i]];
             let (h, coh) = Self::sample_at(p, self.frequencies[i], self.sample_rate);
+            stitched[i] = h;
+            coherence[i] = coh.clamp(0.0, 1.0);
+        }
 
-            let mag = h.norm();
+        let stitched = smooth_complex(&stitched, &self.frequencies, self.smoothing);
+
+        for i in 0..n {
+            let mag = stitched[i].norm();
             magnitude_db[i] = if mag > 1e-10 {
                 20.0 * mag.log10()
             } else {
                 -120.0
             };
-            phase_deg[i] = h.arg().to_degrees();
-            coherence[i] = coh.clamp(0.0, 1.0);
+            phase_deg[i] = stitched[i].arg().to_degrees();
         }
 
         let group_delay_ms = group_delay_from_log_axis(&self.frequencies, &phase_deg);

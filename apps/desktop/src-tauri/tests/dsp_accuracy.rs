@@ -72,3 +72,31 @@ fn multi_window_output_is_on_the_log_axis() {
     assert_eq!(d.frequencies.len(), d.phase_deg.len());
     assert_eq!(d.frequencies.len(), d.group_delay_ms.len());
 }
+
+#[test]
+fn smoothing_setting_is_applied_to_multi_window_output() {
+    use phonetic_lib::dsp::{MultiWindowProcessor, SmoothingFraction};
+
+    let x = noise(65_536 * 2, 22);
+    let n = noise(65_536 * 2, 23);
+    let y: Vec<f32> = x.iter().zip(&n).map(|(s, e)| s + e * 0.3).collect();
+
+    let mut raw = MultiWindowProcessor::new(FS);
+    raw.process(&y, &x);
+
+    let mut smoothed = MultiWindowProcessor::new(FS);
+    smoothed.set_smoothing(SmoothingFraction::Octave6);
+    smoothed.process(&y, &x);
+
+    // Bin-to-bin variation must fall once smoothing is on.
+    let roughness = |v: &[f32]| -> f32 {
+        v.windows(2).map(|w| (w[1] - w[0]).abs()).sum::<f32>() / (v.len() - 1) as f32
+    };
+
+    let r_raw = roughness(&raw.get_data().magnitude_db);
+    let r_smooth = roughness(&smoothed.get_data().magnitude_db);
+    assert!(
+        r_smooth < r_raw * 0.7,
+        "smoothing should reduce roughness: raw {r_raw:.4}, smoothed {r_smooth:.4}"
+    );
+}
