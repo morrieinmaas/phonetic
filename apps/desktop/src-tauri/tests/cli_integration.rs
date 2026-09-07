@@ -87,3 +87,36 @@ fn selftest_passes_on_a_healthy_build() {
         "selftest output should report PASS, got:\n{out}"
     );
 }
+
+/// The binary must exist, run, and set a non-zero exit code on failure.
+#[test]
+fn binary_reports_failure_with_a_non_zero_exit_code() {
+    let exe = env!("CARGO_BIN_EXE_phonetic-cli");
+    let output = std::process::Command::new(exe)
+        .args(["measure", "--file", "/nope/missing.wav"])
+        .output()
+        .expect("binary should run");
+
+    assert!(
+        !output.status.success(),
+        "a missing file must exit non-zero"
+    );
+    assert!(
+        !String::from_utf8_lossy(&output.stderr).is_empty(),
+        "failures must explain themselves on stderr"
+    );
+}
+
+#[test]
+fn binary_selftest_exits_zero() {
+    let exe = env!("CARGO_BIN_EXE_phonetic-cli");
+    let output = std::process::Command::new(exe)
+        .arg("selftest")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "selftest should exit 0 on a healthy build"
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("PASS"));
+}

@@ -257,3 +257,15 @@ status:
 tag version:
     git tag -a v{{version}} -m "Release v{{version}}"
     git push origin v{{version}}
+
+# ============================================================================
+# Headless CLI
+# ============================================================================
+
+# Run the headless CLI (e.g. `just cli selftest`)
+cli *ARGS:
+    cd {{tauri}} && cargo run --bin phonetic-cli -- {{ARGS}}
+
+# Build the CLI in release mode
+cli-release:
+    cd {{tauri}} && cargo build --release --bin phonetic-cli
