@@ -158,7 +158,12 @@ impl ImpulseResponseProcessor {
 
         // Deconvolution with regularization: H = Y / X
         // Using Wiener deconvolution: H = (X* * Y) / (|X|^2 + epsilon)
-        let epsilon = 1e-6; // Regularization to avoid division by zero
+        // Regularisation must scale with the reference, or a quiet reference is
+        // swamped by the constant and a loud one is unregularised. 1e-4 of mean
+        // reference energy is ~-40 dB, below any real measurement's noise floor.
+        let mean_ref_energy: f32 = self.spectrum_ref.iter().map(|c| c.norm_sqr()).sum::<f32>()
+            / self.spectrum_ref.len() as f32;
+        let epsilon = (mean_ref_energy * 1e-4).max(1e-20);
 
         for i in 0..self.spectrum_ref.len() {
             let x = self.spectrum_ref[i];
