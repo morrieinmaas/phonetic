@@ -80,13 +80,9 @@ cargo test --test dsp_accuracy -- --nocapture   # accuracy suite only
 
 ### Known limitations
 
-Honesty cuts both ways. Two are documented in the test suite itself rather than left for you to
-discover on a show site:
+Honesty cuts both ways. This one is documented in the test suite itself rather than left for you
+to discover on a show site:
 
-- **No delay compensation in the transfer function.** The delay finder locates an offset exactly,
-  but the result is not yet applied to the reference signal, so a realistic acoustic delay
-  (10 ms ≈ 3.4 m) degrades high-frequency coherence. Test:
-  `uncompensated_acoustic_delay_collapses_hf_coherence`.
 - **Fixed single FFT length.** There is no multi-time-window or fractional-octave smoothing yet,
   so low-frequency resolution is limited by the chosen FFT size (11.7 Hz at 4096 / 48 kHz).
 
@@ -103,13 +99,13 @@ discover on a show site:
 just install
 
 # Run in development mode
-just tauri-dev
+just dev
 
 # Build for production
-just tauri-build
+just build-release
 
 # Run checks
-just check-all
+just check
 
 # Run tests
 just test

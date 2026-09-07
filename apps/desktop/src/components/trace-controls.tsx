@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { applyMeasuredDelay } from "../services/delay-apply";
 import { useTraceStore } from "../stores/trace-store";
 import type { TraceSlot, TransferFunctionData } from "../types/audio";
 
@@ -13,6 +14,23 @@ export const TraceControls = ({ currentData, isRunning }: TraceControlsProps) =>
 	const { traces, slots, captureToSlot, toggleTraceVisibility, deleteTrace, clearAllTraces } =
 		useTraceStore();
 	const [showList, setShowList] = useState(false);
+	const [delayInput, setDelayInput] = useState("");
+	const [delayStatus, setDelayStatus] = useState<"idle" | "applied" | "rejected">("idle");
+	const [appliedDelay, setAppliedDelay] = useState<number | null>(null);
+
+	const handleApplyDelay = useCallback(async () => {
+		const delaySamples = Number(delayInput);
+		const applied = await applyMeasuredDelay({
+			delay_samples: delaySamples,
+			is_valid: Number.isFinite(delaySamples),
+		});
+		if (applied) {
+			setAppliedDelay(delaySamples);
+			setDelayStatus("applied");
+		} else {
+			setDelayStatus("rejected");
+		}
+	}, [delayInput]);
 
 	const handleSlotClick = useCallback(
 		(slot: TraceSlot) => {
@@ -80,6 +98,35 @@ export const TraceControls = ({ currentData, isRunning }: TraceControlsProps) =>
 						</button>
 					);
 				})}
+			</div>
+
+			{/* Apply a measured delay to compensate the transfer function reference */}
+			<div className="flex items-center gap-1 ml-2 border-l border-border pl-2">
+				<span className="text-xs text-muted-foreground mr-1">Delay:</span>
+				<input
+					type="number"
+					min={0}
+					value={delayInput}
+					onChange={(e) => setDelayInput(e.target.value)}
+					placeholder="samples"
+					className="w-16 px-1 py-0.5 text-xs rounded border border-border bg-background"
+				/>
+				<button
+					type="button"
+					data-testid="apply-delay"
+					onClick={handleApplyDelay}
+					disabled={delayInput === ""}
+					title="Apply the measured delay to compensate the transfer function reference"
+					className="px-2 py-1 text-xs rounded border border-border hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed"
+				>
+					Apply
+				</button>
+				{delayStatus === "applied" && (
+					<span className="text-[10px] text-muted-foreground">Applied {appliedDelay} smp</span>
+				)}
+				{delayStatus === "rejected" && (
+					<span className="text-[10px] text-destructive">Invalid delay</span>
+				)}
 			</div>
 
 			{/* Show/hide toggle buttons for each stored trace */}
