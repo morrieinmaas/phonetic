@@ -56,3 +56,73 @@ fn requesting_a_channel_out_of_range_returns_empty() {
     let buffers = ChannelBuffers::new(2, 16);
     assert!(buffers.channel(7).is_empty());
 }
+
+use phonetic_lib::dsp::{average_traces, TransferFunctionData};
+
+fn trace(magnitude_db: f32, phase_deg: f32) -> TransferFunctionData {
+    let frequencies: Vec<f32> = (0..50).map(|i| 20.0 * 1.2f32.powi(i)).collect();
+    let n = frequencies.len();
+    TransferFunctionData {
+        magnitude_db: vec![magnitude_db; n],
+        phase_deg: vec![phase_deg; n],
+        coherence: vec![0.9; n],
+        group_delay_ms: vec![0.0; n],
+        frequencies,
+    }
+}
+
+#[test]
+fn averaging_one_trace_returns_it_unchanged() {
+    let input = trace(-3.0, 45.0);
+    let out = average_traces(std::slice::from_ref(&input)).unwrap();
+    for (a, b) in input.magnitude_db.iter().zip(&out.magnitude_db) {
+        assert!((a - b).abs() < 1e-3);
+    }
+}
+
+#[test]
+fn averaging_identical_traces_changes_nothing() {
+    let out = average_traces(&[trace(-3.0, 45.0), trace(-3.0, 45.0), trace(-3.0, 45.0)]).unwrap();
+    for m in &out.magnitude_db {
+        assert!((m - -3.0).abs() < 1e-3, "got {m}");
+    }
+}
+
+/// The reason to average complex values rather than dB: two positions in
+/// opposite polarity really do cancel, and the operator needs to see that.
+#[test]
+fn opposite_polarity_positions_cancel() {
+    let out = average_traces(&[trace(0.0, 0.0), trace(0.0, 180.0)]).unwrap();
+    for m in &out.magnitude_db {
+        assert!(*m < -40.0, "opposite polarity should null, got {m} dB");
+    }
+}
+
+#[test]
+fn averaging_carries_the_lowest_coherence_forward() {
+    let mut low = trace(0.0, 0.0);
+    low.coherence = vec![0.2; low.coherence.len()];
+    let out = average_traces(&[trace(0.0, 0.0), low]).unwrap();
+    for c in &out.coherence {
+        assert!(
+            (c - 0.2).abs() < 1e-3,
+            "worst-case coherence should survive, got {c}"
+        );
+    }
+}
+
+#[test]
+fn averaging_nothing_is_an_error() {
+    assert!(average_traces(&[]).is_err());
+}
+
+#[test]
+fn averaging_traces_on_different_axes_is_an_error() {
+    let mut other = trace(0.0, 0.0);
+    other.frequencies.pop();
+    other.magnitude_db.pop();
+    other.phase_deg.pop();
+    other.coherence.pop();
+    other.group_delay_ms.pop();
+    assert!(average_traces(&[trace(0.0, 0.0), other]).is_err());
+}
