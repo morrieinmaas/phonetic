@@ -40,6 +40,56 @@ Modern, Apple Silicon-native audio measurement system. A rival to [AFMG SysTune]
 - Glassmorphism design
 - Settings dialog with FFT size and backend selection
 
+## Measurement Accuracy
+
+An audio analyzer is only worth as much as your trust in its numbers. Most measurement
+software asks you to take that on faith. Phonetic publishes its working.
+
+The suite in [`apps/desktop/src-tauri/tests/dsp_accuracy.rs`](apps/desktop/src-tauri/tests/dsp_accuracy.rs)
+measures signals whose correct answer is known **analytically** — derived from theory, not
+captured from an earlier run of this same software. A closed-form filter, a synthesised decay
+with a chosen T60, a published standards table. If the DSP drifts, these fail with a number you
+can read off against the maths.
+
+| Property under test | Analytical reference | Tolerance | Measured |
+|---|---|---|---|
+| Identity path (ref = meas) | 0 dB, coherence 1.0 | 0.01 dB | ✅ pass |
+| Known gain (×0.5) | −6.0206 dB | 0.01 dB | ✅ pass |
+| Inverted polarity | 180° | 1° | ✅ pass |
+| **One-pole lowpass response** | `H(ω) = (1−a)/(1−a·e^−jω)` | **0.5 dB / 2°, 100 Hz–15 kHz** | ✅ pass |
+| Coherence vs. noise | `γ² = SNR/(1+SNR)` at 0, 10, 20 dB | 0.03 | ✅ pass |
+| Pure delay (1 ms) | flat 1.00 ms group delay | 0.05 ms | ✅ pass |
+| A-weighting | IEC 61672-1 Table 3, 8 frequencies | 0.2 dB | ✅ pass |
+| RT60 estimation | synthesised T60 = 200 ms | 10% | ✅ pass |
+
+The fourth row is the load-bearing one. A one-pole lowpass has an exact closed-form magnitude
+and phase response. Recovering it to within 0.5 dB and 2° across the audio band means the
+dual-FFT engine — windowing, overlap, cross-spectrum averaging, phase unwrapping — is correct,
+not merely self-consistent.
+
+**These assertions have teeth.** Perturbing the reference filter coefficient by 2% (0.90 → 0.88)
+fails the magnitude check at 1.673 dB, so the suite detects errors well below the threshold at
+which a listener or a rival analyzer would notice one.
+
+Run them yourself:
+
+```bash
+just test-rust                                  # full suite
+cargo test --test dsp_accuracy -- --nocapture   # accuracy suite only
+```
+
+### Known limitations
+
+Honesty cuts both ways. Two are documented in the test suite itself rather than left for you to
+discover on a show site:
+
+- **No delay compensation in the transfer function.** The delay finder locates an offset exactly,
+  but the result is not yet applied to the reference signal, so a realistic acoustic delay
+  (10 ms ≈ 3.4 m) degrades high-frequency coherence. Test:
+  `uncompensated_acoustic_delay_collapses_hf_coherence`.
+- **Fixed single FFT length.** There is no multi-time-window or fractional-octave smoothing yet,
+  so low-frequency resolution is limited by the chosen FFT size (11.7 Hz at 4096 / 48 kHz).
+
 ## Tech Stack
 
 - **Backend**: Rust (Tauri 2 + CPAL + realfft)
