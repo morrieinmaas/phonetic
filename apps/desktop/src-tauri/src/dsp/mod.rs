@@ -5,6 +5,7 @@ mod fft;
 mod impulse_response;
 mod multi_window;
 mod reference_curves;
+mod smoothing;
 mod transfer_function;
 mod windows;
 
@@ -15,6 +16,7 @@ pub use fft::*;
 pub use impulse_response::*;
 pub use multi_window::*;
 pub use reference_curves::*;
+pub use smoothing::*;
 pub use transfer_function::*;
 
 // Window functions for future use
