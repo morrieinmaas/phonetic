@@ -242,6 +242,45 @@ fn changing_delay_resets_averaging() {
     assert_eq!(tf.delay_samples(), 64);
 }
 
+/// Averaging must saturate, not grow without bound, or the display stops responding
+/// to changes in the system under test.
+#[test]
+fn averaging_saturates_at_the_configured_limit() {
+    let x = noise(FFT * 200, 12);
+    let mut tf = TransferFunctionProcessor::new(FFT, FS);
+    tf.set_max_averages(8);
+    tf.process(&x, &x);
+    assert_eq!(
+        tf.average_count(),
+        8,
+        "average count must cap at max_averages"
+    );
+}
+
+/// After saturation the estimate must track a change in the system rather than stay
+/// anchored to history. Measure at 0 dB, switch the path to -6 dB, and confirm the
+/// display converges on the new value.
+#[test]
+fn saturated_averaging_still_tracks_a_changed_system() {
+    let mut tf = TransferFunctionProcessor::new(FFT, FS);
+    tf.set_max_averages(8);
+
+    let x1 = noise(FFT * 100, 13);
+    tf.process(&x1, &x1); // unity gain, long enough to saturate
+
+    let x2 = noise(FFT * 100, 14);
+    let y2: Vec<f32> = x2.iter().map(|s| s * 0.5).collect(); // now -6.02 dB
+    tf.process(&y2, &x2);
+
+    let d = tf.get_data();
+    let r = band(500.0, 10_000.0);
+    let mean: f32 = d.magnitude_db[r.clone()].iter().sum::<f32>() / r.len() as f32;
+    assert!(
+        (mean - (-6.0206)).abs() < 0.5,
+        "should have converged on -6.02 dB, got {mean:.3} dB"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Weighting curves and RT60
 // ---------------------------------------------------------------------------

@@ -6,6 +6,10 @@ use std::sync::Arc;
 
 use super::windows::apply_hann_window;
 
+/// Frames retained by the running average. Past this, the oldest frames decay
+/// exponentially so the display keeps tracking the system under test.
+pub const DEFAULT_MAX_AVERAGES: usize = 16;
+
 /// Transfer function measurement data returned to frontend
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransferFunctionData {
@@ -49,6 +53,7 @@ pub struct TransferFunctionProcessor {
     syy_sum: Vec<f32>,
     sxy_sum: Vec<Complex<f32>>,
     average_count: usize,
+    max_averages: usize,
 
     // Output data
     magnitude_db: Vec<f32>,
@@ -90,6 +95,7 @@ impl TransferFunctionProcessor {
             syy_sum: vec![0.0; spectrum_len],
             sxy_sum: vec![Complex::new(0.0, 0.0); spectrum_len],
             average_count: 0,
+            max_averages: DEFAULT_MAX_AVERAGES,
             magnitude_db: vec![-120.0; spectrum_len],
             phase_deg: vec![0.0; spectrum_len],
             coherence: vec![0.0; spectrum_len],
@@ -152,6 +158,20 @@ impl TransferFunctionProcessor {
             // Sxx = |X|^2 (auto-spectrum of reference)
             // Syy = |Y|^2 (auto-spectrum of input)
             // Sxy = conj(X) * Y (cross-spectrum)
+            // Once saturated, decay the accumulated sums so they represent an
+            // exponentially weighted mean over the last `max_averages` frames
+            // rather than the whole history.
+            if self.average_count >= self.max_averages {
+                let decay = (self.max_averages - 1) as f32 / self.max_averages as f32;
+                for i in 0..self.sxx_sum.len() {
+                    self.sxx_sum[i] *= decay;
+                    self.syy_sum[i] *= decay;
+                    self.sxy_sum[i] *= decay;
+                }
+            } else {
+                self.average_count += 1;
+            }
+
             for i in 0..self.sxx_sum.len() {
                 let x = self.ref_spectrum[i];
                 let y = self.input_spectrum[i];
@@ -160,7 +180,6 @@ impl TransferFunctionProcessor {
                 self.syy_sum[i] += y.norm_sqr();
                 self.sxy_sum[i] += x.conj() * y;
             }
-            self.average_count += 1;
 
             // Compute transfer function from averaged spectra
             self.compute_transfer_function();
@@ -323,12 +342,24 @@ impl TransferFunctionProcessor {
         self.delay_samples
     }
 
-    /// Change FFT size (resets processor, preserves delay compensation)
+    /// Number of frames retained by the running average. Higher is smoother and
+    /// slower to react; lower is noisier and more responsive.
+    pub fn set_max_averages(&mut self, n: usize) {
+        self.max_averages = n.max(1);
+    }
+
+    /// Current averaging depth in frames.
+    pub fn max_averages(&self) -> usize {
+        self.max_averages
+    }
+
+    /// Change FFT size (resets processor, preserves delay compensation and averaging depth)
     pub fn set_fft_size(&mut self, fft_size: usize) {
         if fft_size != self.fft_size && fft_size.is_power_of_two() {
-            let delay = self.delay_samples;
+            let (delay, max_avg) = (self.delay_samples, self.max_averages);
             *self = Self::new(fft_size, self.sample_rate);
             self.set_delay_samples(delay);
+            self.set_max_averages(max_avg);
         }
     }
 
