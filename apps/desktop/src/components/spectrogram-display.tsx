@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { magnitudeToRgb } from "../lib/colormap";
 import { type SpectrogramBuffer, createSpectrogramBuffer } from "../lib/spectrogram-buffer";
+import { fillSpectrogramPixels } from "../lib/spectrogram-render";
 
 interface SpectrogramDisplayProps {
 	spectrumData: number[];
@@ -9,31 +10,26 @@ interface SpectrogramDisplayProps {
 	isRunning: boolean;
 }
 
-/** Map linear FFT bins to log frequency bins */
-const mapToLogBins = (
+/** Map linear FFT bins to log frequency bins, writing straight into `target` (no allocation). */
+const mapToLogBinsInto = (
+	target: Float32Array,
 	linearData: number[],
 	sampleRate: number,
 	fftSize: number,
-	numBins: number,
 	minFreq: number,
 	maxFreq: number,
-): number[] => {
+): void => {
+	const numBins = target.length;
 	const binWidth = sampleRate / fftSize;
 	const logMin = Math.log10(minFreq);
 	const logMax = Math.log10(maxFreq);
 	const logStep = (logMax - logMin) / (numBins - 1);
 
-	const result: number[] = [];
 	for (let i = 0; i < numBins; i++) {
 		const freq = 10 ** (logMin + i * logStep);
 		const bin = Math.round(freq / binWidth);
-		if (bin >= 0 && bin < linearData.length) {
-			result.push(linearData[bin] ?? -120);
-		} else {
-			result.push(-120);
-		}
+		target[i] = bin >= 0 && bin < linearData.length ? (linearData[bin] ?? -120) : -120;
 	}
-	return result;
 };
 
 /** Default spectrogram configuration */
@@ -150,12 +146,9 @@ export const SpectrogramDisplay = ({
 		const scratch = spectrumScratchRef.current;
 		if (!buffer || !scratch) return;
 
-		// Map to log frequency scale and push the new column into the ring buffer.
-		// mapToLogBins allocates its result, but it runs once per incoming spectrum
-		// (not per pixel); copying into the reused scratch keeps the buffer push itself
-		// allocation-free.
-		const logData = mapToLogBins(spectrumData, sampleRate, fftSize, height, MIN_FREQ, MAX_FREQ);
-		scratch.set(logData);
+		// Map to log frequency scale directly into the reused scratch buffer and push
+		// it into the ring buffer. No allocation anywhere in this path.
+		mapToLogBinsInto(scratch, spectrumData, sampleRate, fftSize, MIN_FREQ, MAX_FREQ);
 		buffer.push(scratch);
 
 		// Create or reuse ImageData
@@ -168,43 +161,14 @@ export const SpectrogramDisplay = ({
 		}
 
 		const imageData = imageDataRef.current;
-		const data = imageData.data;
 		const lut = colorLutRef.current;
-		const dbRange = maxDb - minDb;
 		const bg = theme === "dark" ? 10 : 250;
 
 		// Fill the image data: columns oldest (left) to newest (right), bins bottom
 		// (low frequency) to top (high frequency). No allocation here — this is the
-		// per-frame path, and it only writes into `data` and calls putImageData once.
-		for (let x = 0; x < width; x++) {
-			const age = width - 1 - x;
-			const hasColumn = age < buffer.length;
-			const column = buffer.column(age);
-
-			for (let row = 0; row < height; row++) {
-				const y = height - 1 - row;
-				const pixelIndex = (y * width + x) * 4;
-
-				if (hasColumn) {
-					const db = column[row] ?? -120;
-					// Normalize to 0-1 range
-					const normalized = Math.max(0, Math.min(1, (db - minDb) / dbRange));
-					// Map to color LUT index (0-255)
-					const lutIndex = Math.floor(normalized * 255) * 4;
-
-					data[pixelIndex + 0] = lut[lutIndex + 0] ?? 0;
-					data[pixelIndex + 1] = lut[lutIndex + 1] ?? 0;
-					data[pixelIndex + 2] = lut[lutIndex + 2] ?? 0;
-					data[pixelIndex + 3] = 255;
-				} else {
-					// Background color for empty areas
-					data[pixelIndex + 0] = bg;
-					data[pixelIndex + 1] = bg;
-					data[pixelIndex + 2] = bg;
-					data[pixelIndex + 3] = 255;
-				}
-			}
-		}
+		// per-frame path, and it only writes into `imageData.data` and calls
+		// putImageData once.
+		fillSpectrogramPixels(imageData.data, buffer, lut, width, height, minDb, maxDb, bg);
 
 		ctx.putImageData(imageData, 0, 0);
 
