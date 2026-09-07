@@ -37,9 +37,13 @@ export const nearestIndex = (frequencies: number[], target: number): number => {
 		return -1;
 	}
 	let best = 0;
-	let bestDistance = Math.abs(frequencies[0] - target);
-	for (let i = 1; i < frequencies.length; i++) {
-		const distance = Math.abs(frequencies[i] - target);
+	let bestDistance = Number.POSITIVE_INFINITY;
+	for (let i = 0; i < frequencies.length; i++) {
+		const freq = frequencies[i];
+		if (freq === undefined) {
+			continue;
+		}
+		const distance = Math.abs(freq - target);
 		if (distance < bestDistance) {
 			best = i;
 			bestDistance = distance;

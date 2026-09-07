@@ -24,8 +24,13 @@ export const magnitudeToRgb = (
 	const index = Math.min(STOPS.length - 2, Math.floor(scaled));
 	const frac = scaled - index;
 
-	const [r0, g0, b0] = STOPS[index];
-	const [r1, g1, b1] = STOPS[index + 1];
+	const stop0 = STOPS[index];
+	const stop1 = STOPS[index + 1];
+	if (!stop0 || !stop1) {
+		throw new Error(`colormap index out of range: ${index}`);
+	}
+	const [r0, g0, b0] = stop0;
+	const [r1, g1, b1] = stop1;
 
 	return [
 		Math.round(r0 + (r1 - r0) * frac),

@@ -30,7 +30,10 @@ export const createSpectrogramBuffer = (
 			if (spectrum.length !== binCount) {
 				return;
 			}
-			columns[head].set(spectrum);
+			const target = columns[head];
+			if (target) {
+				target.set(spectrum);
+			}
 			head = (head + 1) % historyLength;
 			filled = Math.min(filled + 1, historyLength);
 		},
@@ -39,7 +42,11 @@ export const createSpectrogramBuffer = (
 			if (age < 0 || age >= filled) {
 				return silence;
 			}
-			return columns[(head - 1 - age + historyLength) % historyLength];
+			const value = columns[(head - 1 - age + historyLength) % historyLength];
+			if (!value) {
+				return silence;
+			}
+			return value;
 		},
 
 		get length() {
