@@ -5,6 +5,7 @@ mod fft;
 mod impulse_response;
 mod reference_curves;
 mod transfer_function;
+mod virtual_eq;
 mod windows;
 
 pub use calibration::*;
@@ -14,6 +15,7 @@ pub use fft::*;
 pub use impulse_response::*;
 pub use reference_curves::*;
 pub use transfer_function::*;
+pub use virtual_eq::*;
 
 // Window functions for future use
 #[allow(unused_imports)]
