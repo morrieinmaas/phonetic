@@ -37,6 +37,10 @@ pub struct TransferFunctionProcessor {
     ref_accumulator: Vec<f32>,
     hop_size: usize,
 
+    /// Samples by which the reference is delayed to align with the measurement.
+    /// Sourced from the delay finder; see `set_delay_samples`.
+    delay_samples: usize,
+
     // Averaging state for noise reduction (Welch's method)
     // Sxx = auto-spectrum of reference
     // Syy = auto-spectrum of input
@@ -81,6 +85,7 @@ impl TransferFunctionProcessor {
             input_accumulator: Vec::with_capacity(fft_size * 2),
             ref_accumulator: Vec::with_capacity(fft_size * 2),
             hop_size,
+            delay_samples: 0,
             sxx_sum: vec![0.0; spectrum_len],
             syy_sum: vec![0.0; spectrum_len],
             sxy_sum: vec![Complex::new(0.0, 0.0); spectrum_len],
@@ -297,12 +302,33 @@ impl TransferFunctionProcessor {
         self.group_delay_ms.iter_mut().for_each(|v| *v = 0.0);
         self.input_accumulator.clear();
         self.ref_accumulator.clear();
+        // Priming the reference with `delay_samples` zeros delays it by exactly that
+        // many samples, aligning x[n-D] with the measurement y[n].
+        self.ref_accumulator.resize(self.delay_samples, 0.0);
     }
 
-    /// Change FFT size (resets processor)
+    /// Delay the reference signal by `delay` samples before computing the transfer
+    /// function, compensating for the acoustic propagation time to the measurement
+    /// microphone. Resets averaging, since accumulated frames used the old alignment.
+    pub fn set_delay_samples(&mut self, delay: usize) {
+        if delay == self.delay_samples {
+            return;
+        }
+        self.delay_samples = delay;
+        self.reset_averaging();
+    }
+
+    /// Current reference delay in samples.
+    pub fn delay_samples(&self) -> usize {
+        self.delay_samples
+    }
+
+    /// Change FFT size (resets processor, preserves delay compensation)
     pub fn set_fft_size(&mut self, fft_size: usize) {
         if fft_size != self.fft_size && fft_size.is_power_of_two() {
+            let delay = self.delay_samples;
             *self = Self::new(fft_size, self.sample_rate);
+            self.set_delay_samples(delay);
         }
     }
 

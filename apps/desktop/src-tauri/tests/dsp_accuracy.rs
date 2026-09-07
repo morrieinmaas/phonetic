@@ -5,7 +5,9 @@
 //! The existing suites check that outputs are finite and in range. These check
 //! that they are *correct*.
 
-use phonetic_lib::dsp::{a_weighting, DelayFinder, ImpulseResponseProcessor, TransferFunctionProcessor};
+use phonetic_lib::dsp::{
+    a_weighting, DelayFinder, ImpulseResponseProcessor, TransferFunctionProcessor,
+};
 use std::f32::consts::PI;
 
 const FS: f32 = 48_000.0;
@@ -30,7 +32,10 @@ fn noise(n: usize, seed: u32) -> Vec<f32> {
 fn measure(meas: &[f32], reference: &[f32]) -> phonetic_lib::dsp::TransferFunctionData {
     let mut tf = TransferFunctionProcessor::new(FFT, FS);
     tf.process(meas, reference);
-    assert!(tf.average_count() > 10, "not enough averages to be meaningful");
+    assert!(
+        tf.average_count() > 10,
+        "not enough averages to be meaningful"
+    );
     tf.get_data()
 }
 
@@ -136,8 +141,14 @@ fn one_pole_lowpass_matches_closed_form_response() {
         worst_phase = worst_phase.max((d.phase_deg[i] - expect_phase).abs());
     }
 
-    assert!(worst_mag < 0.5, "worst magnitude error {worst_mag:.3} dB (limit 0.5)");
-    assert!(worst_phase < 2.0, "worst phase error {worst_phase:.3} deg (limit 2.0)");
+    assert!(
+        worst_mag < 0.5,
+        "worst magnitude error {worst_mag:.3} dB (limit 0.5)"
+    );
+    assert!(
+        worst_phase < 2.0,
+        "worst phase error {worst_phase:.3} deg (limit 2.0)"
+    );
 }
 
 /// Coherence is not decorative — it is what tells an operator whether to trust
@@ -181,32 +192,54 @@ fn pure_delay_reads_as_flat_group_delay() {
     );
 }
 
-/// Documents a real limitation: the delay finder result is never fed back into
-/// the transfer function, so a realistic acoustic delay (10 ms = ~3.4 m) is
-/// left uncompensated and coherence collapses at high frequency. Fix the
-/// pipeline and this assertion should be inverted to demand good coherence.
+/// A realistic acoustic delay (10 ms ≈ 3.4 m) must not degrade the measurement once
+/// the delay finder's result is applied to the reference.
 #[test]
-fn uncompensated_acoustic_delay_collapses_hf_coherence() {
+fn compensated_acoustic_delay_preserves_coherence_and_flattens_phase() {
     let delay_samples = 480; // 10 ms — a mic 3.4 m from the box
     let x = noise(FFT * FRAMES, 8);
     let mut y = vec![0.0; x.len()];
     y[delay_samples..].copy_from_slice(&x[..x.len() - delay_samples]);
 
-    let d = measure(&y, &x);
-    let r = band(2_000.0, 15_000.0);
-    let mean: f32 = d.coherence[r.clone()].iter().sum::<f32>() / r.len() as f32;
-
-    // The delay finder sees it perfectly...
+    // The delay finder locates it exactly.
     let mut finder = DelayFinder::new(FFT, FS, 50.0);
     let found = finder.find_delay(&x[..FFT * 2], &y[..FFT * 2]);
-    assert_eq!(found.delay_samples, delay_samples as i32, "delay finder should be exact");
-
-    // ...but nothing applies it, so the transfer function is still degraded.
-    assert!(
-        mean < 0.999,
-        "coherence {mean:.4} — if this now reads ~1.0, delay compensation landed; \
-         invert this assertion"
+    assert_eq!(
+        found.delay_samples, delay_samples as i32,
+        "delay finder should be exact"
     );
+
+    // Applying it restores the measurement.
+    let mut tf = TransferFunctionProcessor::new(FFT, FS);
+    tf.set_delay_samples(found.delay_samples as usize);
+    tf.process(&y, &x);
+    let d = tf.get_data();
+
+    let r = band(2_000.0, 15_000.0);
+    let mean_coh: f32 = d.coherence[r.clone()].iter().sum::<f32>() / r.len() as f32;
+    assert!(
+        mean_coh > 0.99,
+        "compensated coherence should be ~1.0, got {mean_coh:.4}"
+    );
+
+    let mean_mag: f32 = d.magnitude_db[r.clone()].iter().sum::<f32>() / r.len() as f32;
+    assert!(
+        mean_mag.abs() < 0.5,
+        "compensated magnitude should be ~0 dB, got {mean_mag:.3} dB"
+    );
+}
+
+/// Setting a delay must discard averages accumulated at the old alignment.
+#[test]
+fn changing_delay_resets_averaging() {
+    let x = noise(FFT * 8, 11);
+    let mut tf = TransferFunctionProcessor::new(FFT, FS);
+    tf.process(&x, &x);
+    assert!(tf.average_count() > 0);
+
+    tf.set_delay_samples(64);
+    assert_eq!(tf.average_count(), 0, "changing delay must reset averaging");
+    assert_eq!(tf.delay_samples(), 64);
 }
 
 // ---------------------------------------------------------------------------
