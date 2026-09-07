@@ -124,6 +124,25 @@ export const audioApi = {
 	},
 
 	/**
+	 * Delay the transfer function reference to compensate for propagation time
+	 * @param delaySamples - Reference delay in samples
+	 */
+	setTransferFunctionDelay: (delaySamples: number): Promise<void> =>
+		invoke("set_transfer_function_delay", { delaySamples }),
+
+	/**
+	 * Get the current transfer function reference delay
+	 * @returns Reference delay in samples
+	 */
+	getTransferFunctionDelay: (): Promise<number> => invoke<number>("get_transfer_function_delay"),
+
+	/**
+	 * Set the number of frames retained by the transfer function running average
+	 * @param count - Averaging depth in frames
+	 */
+	setMaxAverages: (count: number): Promise<void> => invoke("set_max_averages", { count }),
+
+	/**
 	 * Set audio backend (requires stream to be stopped)
 	 * @param backend - Backend to use ("cpal" or "core_audio")
 	 */

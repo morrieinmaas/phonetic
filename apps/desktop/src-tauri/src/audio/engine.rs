@@ -478,6 +478,23 @@ impl AudioEngine {
         log::info!("FFT size set to {}", size);
         Ok(())
     }
+
+    /// Delay the transfer function reference to compensate for propagation time.
+    pub fn set_transfer_function_delay(&self, delay_samples: usize) {
+        self.transfer_function_processor
+            .lock()
+            .set_delay_samples(delay_samples);
+    }
+
+    /// Current transfer function reference delay in samples.
+    pub fn transfer_function_delay(&self) -> usize {
+        self.transfer_function_processor.lock().delay_samples()
+    }
+
+    /// Frames retained by the transfer function running average.
+    pub fn set_max_averages(&self, n: usize) {
+        self.transfer_function_processor.lock().set_max_averages(n);
+    }
 }
 
 impl Default for AudioEngine {

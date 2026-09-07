@@ -169,6 +169,21 @@ pub fn set_fft_size(engine: State<'_, AudioEngine>, size: usize) -> Result<(), S
     engine.set_fft_size(size)
 }
 
+#[tauri::command]
+pub fn set_transfer_function_delay(engine: State<'_, AudioEngine>, delay_samples: usize) {
+    engine.set_transfer_function_delay(delay_samples);
+}
+
+#[tauri::command]
+pub fn get_transfer_function_delay(engine: State<'_, AudioEngine>) -> usize {
+    engine.transfer_function_delay()
+}
+
+#[tauri::command]
+pub fn set_max_averages(engine: State<'_, AudioEngine>, count: usize) {
+    engine.set_max_averages(count);
+}
+
 // ============================================================================
 // Delay Finder Commands
 // ============================================================================
@@ -457,5 +472,17 @@ mod tests {
         // Invalid: out of range
         assert!(!(512..=16384).contains(&256));
         assert!(!(512..=16384).contains(&32768));
+    }
+
+    #[test]
+    fn delay_and_averaging_round_trip_through_the_engine() {
+        let engine = AudioEngine::new();
+        engine.set_transfer_function_delay(480);
+        assert_eq!(engine.transfer_function_delay(), 480);
+
+        engine.set_max_averages(4);
+        // Averaging depth is observable only via behaviour; assert the setter is
+        // reachable and does not panic under the engine's lock.
+        engine.set_max_averages(64);
     }
 }

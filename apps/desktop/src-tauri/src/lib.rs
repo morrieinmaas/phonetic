@@ -42,6 +42,9 @@ pub fn run() {
             commands::get_transfer_function_data,
             commands::reset_averaging,
             commands::set_fft_size,
+            commands::set_transfer_function_delay,
+            commands::get_transfer_function_delay,
+            commands::set_max_averages,
             // Delay finder commands
             commands::find_delay,
             commands::set_delay_finder_max_delay,
