@@ -1,4 +1,4 @@
-mod audio;
+pub mod audio;
 mod commands;
 pub mod dsp;
 
