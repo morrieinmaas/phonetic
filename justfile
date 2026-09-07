@@ -132,6 +132,10 @@ test-rust:
 # Run all tests
 test: test-ts test-rust
 
+# Generate WAV test fixtures used by the e2e suite
+fixtures:
+    cd apps/desktop/src-tauri && cargo test --test audio_file_roundtrip -- --nocapture
+
 # Run Rust tests with coverage (requires cargo-tarpaulin)
 test-rust-coverage:
     cd {{tauri}} && cargo tarpaulin --out Html --output-dir coverage

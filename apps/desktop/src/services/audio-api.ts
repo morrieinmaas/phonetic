@@ -172,6 +172,19 @@ export const audioApi = {
 		invoke<ReferenceCurve>("get_reference_curve_at_frequencies", { curveType, frequencies }),
 };
 
+/**
+ * Measure a transfer function from two channels of a WAV file (offline analysis)
+ * @param path - Filesystem path to the WAV file
+ * @param referenceChannel - Index of the reference channel
+ * @param measurementChannel - Index of the measurement channel
+ */
+export const measureWavFile = (
+	path: string,
+	referenceChannel: number,
+	measurementChannel: number,
+): Promise<TransferFunctionData> =>
+	invoke("measure_wav_file", { path, referenceChannel, measurementChannel });
+
 export type {
 	AudioBackend,
 	AudioDevice,
