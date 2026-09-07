@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { magnitudeToRgb } from "../lib/colormap";
+import { type SpectrogramBuffer, createSpectrogramBuffer } from "../lib/spectrogram-buffer";
 
 interface SpectrogramDisplayProps {
 	spectrumData: number[];
@@ -6,72 +8,6 @@ interface SpectrogramDisplayProps {
 	fftSize: number;
 	isRunning: boolean;
 }
-
-type ColorMap = "viridis" | "plasma" | "inferno" | "magma" | "turbo";
-
-/** Color maps for spectrogram display (256 RGB values each) */
-const COLOR_MAPS: Record<ColorMap, (t: number) => [number, number, number]> = {
-	viridis: (t) => {
-		// Viridis colormap approximation
-		const r = Math.round(
-			255 * (0.267 + 0.005 * t + 2.71 * t * t - 12.9 * t * t * t + 16.3 * t ** 4 - 6.5 * t ** 5),
-		);
-		const g = Math.round(
-			255 * (0.004 + 1.42 * t - 1.54 * t * t + 1.15 * t * t * t - 0.18 * t ** 4),
-		);
-		const b = Math.round(
-			255 * (0.329 + 1.44 * t - 2.88 * t * t + 2.13 * t * t * t - 0.57 * t ** 4),
-		);
-		return [
-			Math.max(0, Math.min(255, r)),
-			Math.max(0, Math.min(255, g)),
-			Math.max(0, Math.min(255, b)),
-		];
-	},
-	plasma: (t) => {
-		const r = Math.round(255 * (0.05 + 2.8 * t - 2.2 * t * t));
-		const g = Math.round(255 * (0.02 + 0.4 * t + 0.85 * t * t - 0.25 * t * t * t));
-		const b = Math.round(255 * (0.53 + 0.65 * t - 2.2 * t * t + 1.1 * t * t * t));
-		return [
-			Math.max(0, Math.min(255, r)),
-			Math.max(0, Math.min(255, g)),
-			Math.max(0, Math.min(255, b)),
-		];
-	},
-	inferno: (t) => {
-		const r = Math.round(255 * (0.0 + 3.6 * t - 2.9 * t * t));
-		const g = Math.round(255 * (0.0 + 0.5 * t + 1.1 * t * t - 0.6 * t * t * t));
-		const b = Math.round(255 * (0.01 + 2.2 * t - 3.8 * t * t + 2.0 * t * t * t));
-		return [
-			Math.max(0, Math.min(255, r)),
-			Math.max(0, Math.min(255, g)),
-			Math.max(0, Math.min(255, b)),
-		];
-	},
-	magma: (t) => {
-		const r = Math.round(255 * (0.0 + 2.8 * t - 1.7 * t * t));
-		const g = Math.round(255 * (0.0 + 0.3 * t + 1.0 * t * t - 0.3 * t * t * t));
-		const b = Math.round(255 * (0.02 + 2.4 * t - 3.2 * t * t + 1.6 * t * t * t));
-		return [
-			Math.max(0, Math.min(255, r)),
-			Math.max(0, Math.min(255, g)),
-			Math.max(0, Math.min(255, b)),
-		];
-	},
-	turbo: (t) => {
-		// Turbo colormap - good perceptual uniformity
-		const r = Math.round(
-			255 * Math.max(0, Math.min(1, 0.13 + 4.3 * t - 13.4 * t * t + 16.5 * t ** 3 - 6.8 * t ** 4)),
-		);
-		const g = Math.round(
-			255 * Math.max(0, Math.min(1, 0.09 + 2.9 * t - 5.5 * t * t + 5.1 * t ** 3 - 1.7 * t ** 4)),
-		);
-		const b = Math.round(
-			255 * Math.max(0, Math.min(1, 0.11 + 3.2 * t - 9.2 * t * t + 9.8 * t ** 3 - 3.4 * t ** 4)),
-		);
-		return [r, g, b];
-	},
-};
 
 /** Map linear FFT bins to log frequency bins */
 const mapToLogBins = (
@@ -114,10 +50,14 @@ export const SpectrogramDisplay = ({
 }: SpectrogramDisplayProps) => {
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 	const containerRef = useRef<HTMLDivElement>(null);
-	const historyRef = useRef<number[][]>([]);
+	// Ring buffer of log-frequency-binned columns, one bin row per canvas pixel row.
+	// Recreated only on resize, alongside imageDataRef and spectrumScratchRef below.
+	const bufferRef = useRef<SpectrogramBuffer | null>(null);
+	// Reused scratch for the log-mapped spectrum, sized to the buffer's bin count,
+	// so pushing a new column never allocates.
+	const spectrumScratchRef = useRef<Float32Array | null>(null);
 	const imageDataRef = useRef<ImageData | null>(null);
 
-	const [colorMap, setColorMap] = useState<ColorMap>("plasma");
 	const [minDb, setMinDb] = useState(DEFAULT_MIN_DB);
 	const [maxDb, setMaxDb] = useState(DEFAULT_MAX_DB);
 	const [isPaused, setIsPaused] = useState(false);
@@ -137,19 +77,18 @@ export const SpectrogramDisplay = ({
 		return () => observer.disconnect();
 	}, []);
 
-	// Update color LUT when colormap changes
+	// Build the color LUT once. The 256 entries span the normalized 0-1 range that
+	// the draw loop maps real dB values into, independent of the current minDb/maxDb.
 	useEffect(() => {
 		const lut = colorLutRef.current;
-		const mapFn = COLOR_MAPS[colorMap];
 		for (let i = 0; i < 256; i++) {
-			const t = i / 255;
-			const [r, g, b] = mapFn(t);
+			const [r, g, b] = magnitudeToRgb(i, 0, 255);
 			lut[i * 4 + 0] = r;
 			lut[i * 4 + 1] = g;
 			lut[i * 4 + 2] = b;
 			lut[i * 4 + 3] = 255;
 		}
-	}, [colorMap]);
+	}, []);
 
 	// Initialize canvas and resize handling
 	useEffect(() => {
@@ -167,6 +106,9 @@ export const SpectrogramDisplay = ({
 				canvas.width = width;
 				canvas.height = height;
 				imageDataRef.current = null; // Force recreation
+				// One bin row per pixel row, one history column per pixel column.
+				bufferRef.current = createSpectrogramBuffer(height, width);
+				spectrumScratchRef.current = new Float32Array(height);
 			}
 		};
 
@@ -180,13 +122,15 @@ export const SpectrogramDisplay = ({
 
 	// Clear history
 	const clearHistory = useCallback(() => {
-		historyRef.current = [];
-		if (canvasRef.current) {
-			const ctx = canvasRef.current.getContext("2d");
-			if (ctx) {
-				ctx.fillStyle = theme === "dark" ? "#0a0a0a" : "#fafafa";
-				ctx.fillRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-			}
+		const canvas = canvasRef.current;
+		if (!canvas) return;
+
+		bufferRef.current = createSpectrogramBuffer(canvas.height, canvas.width);
+
+		const ctx = canvas.getContext("2d");
+		if (ctx) {
+			ctx.fillStyle = theme === "dark" ? "#0a0a0a" : "#fafafa";
+			ctx.fillRect(0, 0, canvas.width, canvas.height);
 		}
 	}, [theme]);
 
@@ -202,15 +146,17 @@ export const SpectrogramDisplay = ({
 		const height = canvas.height;
 		if (width === 0 || height === 0) return;
 
-		// Map to log frequency scale
-		const numBins = height;
-		const logData = mapToLogBins(spectrumData, sampleRate, fftSize, numBins, MIN_FREQ, MAX_FREQ);
+		const buffer = bufferRef.current;
+		const scratch = spectrumScratchRef.current;
+		if (!buffer || !scratch) return;
 
-		// Add to history
-		historyRef.current.push(logData);
-		if (historyRef.current.length > width) {
-			historyRef.current.shift();
-		}
+		// Map to log frequency scale and push the new column into the ring buffer.
+		// mapToLogBins allocates its result, but it runs once per incoming spectrum
+		// (not per pixel); copying into the reused scratch keeps the buffer push itself
+		// allocation-free.
+		const logData = mapToLogBins(spectrumData, sampleRate, fftSize, height, MIN_FREQ, MAX_FREQ);
+		scratch.set(logData);
+		buffer.push(scratch);
 
 		// Create or reuse ImageData
 		if (
@@ -224,22 +170,23 @@ export const SpectrogramDisplay = ({
 		const imageData = imageDataRef.current;
 		const data = imageData.data;
 		const lut = colorLutRef.current;
-		const history = historyRef.current;
-		const historyLen = history.length;
 		const dbRange = maxDb - minDb;
+		const bg = theme === "dark" ? 10 : 250;
 
-		// Fill the image data
+		// Fill the image data: columns oldest (left) to newest (right), bins bottom
+		// (low frequency) to top (high frequency). No allocation here — this is the
+		// per-frame path, and it only writes into `data` and calls putImageData once.
 		for (let x = 0; x < width; x++) {
-			const historyIndex = x - (width - historyLen);
-			const column = historyIndex >= 0 && historyIndex < historyLen ? history[historyIndex] : null;
+			const age = width - 1 - x;
+			const hasColumn = age < buffer.length;
+			const column = buffer.column(age);
 
-			for (let y = 0; y < height; y++) {
-				// Flip Y axis so low frequencies are at bottom
-				const freqIndex = height - 1 - y;
+			for (let row = 0; row < height; row++) {
+				const y = height - 1 - row;
 				const pixelIndex = (y * width + x) * 4;
 
-				if (column && freqIndex < column.length) {
-					const db = column[freqIndex] ?? -120;
+				if (hasColumn) {
+					const db = column[row] ?? -120;
 					// Normalize to 0-1 range
 					const normalized = Math.max(0, Math.min(1, (db - minDb) / dbRange));
 					// Map to color LUT index (0-255)
@@ -251,7 +198,6 @@ export const SpectrogramDisplay = ({
 					data[pixelIndex + 3] = 255;
 				} else {
 					// Background color for empty areas
-					const bg = theme === "dark" ? 10 : 250;
 					data[pixelIndex + 0] = bg;
 					data[pixelIndex + 1] = bg;
 					data[pixelIndex + 2] = bg;
@@ -307,17 +253,6 @@ export const SpectrogramDisplay = ({
 					Spectrogram
 				</h2>
 				<div className="flex items-center gap-2">
-					<select
-						value={colorMap}
-						onChange={(e) => setColorMap(e.target.value as ColorMap)}
-						className="px-2 py-1 text-xs rounded border border-border bg-background text-foreground"
-					>
-						<option value="turbo">Turbo</option>
-						<option value="viridis">Viridis</option>
-						<option value="plasma">Plasma</option>
-						<option value="inferno">Inferno</option>
-						<option value="magma">Magma</option>
-					</select>
 					<div className="flex items-center gap-1 text-xs text-muted-foreground">
 						<span>Range:</span>
 						<input
@@ -357,9 +292,10 @@ export const SpectrogramDisplay = ({
 					</button>
 				</div>
 			</div>
-			<div ref={containerRef} className="flex-1 min-h-[200px] relative">
+			<div ref={containerRef} data-testid="spectrogram" className="flex-1 min-h-[200px] relative">
 				<canvas
 					ref={canvasRef}
+					data-testid="spectrogram-canvas"
 					className="absolute inset-0 w-full h-full"
 					style={{ imageRendering: "pixelated" }}
 				/>
@@ -377,8 +313,7 @@ export const SpectrogramDisplay = ({
 						className="w-24 h-3 rounded"
 						style={{
 							background: `linear-gradient(to right, ${Array.from({ length: 8 }, (_, i) => {
-								const t = i / 7;
-								const [r, g, b] = COLOR_MAPS[colorMap](t);
+								const [r, g, b] = magnitudeToRgb(i, 0, 7);
 								return `rgb(${r},${g},${b})`;
 							}).join(", ")})`,
 						}}
