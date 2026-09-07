@@ -54,3 +54,38 @@ export const formatDelta = (a: CursorSample, b: CursorSample) => ({
 	deltaDb: b.magnitudeDb - a.magnitudeDb,
 	deltaMs: b.groupDelayMs - a.groupDelayMs,
 });
+
+type Range = [number, number];
+
+/** Zoom about `anchor`, clamped so the view never leaves `limits` or inverts. */
+export const applyZoom = (range: Range, factor: number, anchor: number, limits: Range): Range => {
+	const [lo, hi] = range;
+	const width = hi - lo;
+	const newWidth = Math.max(1e-3, width * factor);
+
+	// Keep the anchor at the same fractional position in the view.
+	const position = width === 0 ? 0.5 : (anchor - lo) / width;
+	let newLo = anchor - position * newWidth;
+	let newHi = newLo + newWidth;
+
+	if (newLo < limits[0]) {
+		newHi += limits[0] - newLo;
+		newLo = limits[0];
+	}
+	if (newHi > limits[1]) {
+		newLo -= newHi - limits[1];
+		newHi = limits[1];
+	}
+
+	return [Math.max(limits[0], newLo), Math.min(limits[1], newHi)];
+};
+
+/** Pan by a fraction of the visible width, clamped to `limits`. */
+export const applyPan = (range: Range, deltaFraction: number, limits: Range): Range => {
+	const [lo, hi] = range;
+	const width = hi - lo;
+	let newLo = lo + width * deltaFraction;
+
+	newLo = Math.max(limits[0], Math.min(limits[1] - width, newLo));
+	return [newLo, newLo + width];
+};
