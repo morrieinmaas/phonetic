@@ -119,3 +119,63 @@ fn an_empty_bank_is_transparent() {
         assert!((h.norm() - 1.0).abs() < 1e-6);
     }
 }
+
+use phonetic_lib::dsp::{predict_with_eq, TransferFunctionData};
+
+fn flat_trace() -> TransferFunctionData {
+    let frequencies: Vec<f32> = (0..200).map(|i| 20.0 * 1.05f32.powi(i)).collect();
+    let n = frequencies.len();
+    TransferFunctionData {
+        magnitude_db: vec![0.0; n],
+        phase_deg: vec![0.0; n],
+        coherence: vec![1.0; n],
+        group_delay_ms: vec![0.0; n],
+        frequencies,
+    }
+}
+
+#[test]
+fn predicting_with_no_filters_returns_the_trace_unchanged() {
+    let trace = flat_trace();
+    let out = predict_with_eq(&trace, &[], FS);
+    for (a, b) in trace.magnitude_db.iter().zip(&out.magnitude_db) {
+        assert!((a - b).abs() < 1e-4);
+    }
+}
+
+#[test]
+fn a_cut_shows_up_in_the_prediction() {
+    let trace = flat_trace();
+    let filters = vec![peaking(1000.0, -6.0, 2.0)];
+    let out = predict_with_eq(&trace, &filters, FS);
+
+    // Find the point closest to 1 kHz.
+    let idx = out
+        .frequencies
+        .iter()
+        .enumerate()
+        .min_by(|a, b| {
+            (a.1 - 1000.0)
+                .abs()
+                .partial_cmp(&(b.1 - 1000.0).abs())
+                .unwrap()
+        })
+        .map(|(i, _)| i)
+        .unwrap();
+
+    assert!(
+        (out.magnitude_db[idx] - -6.0).abs() < 0.5,
+        "expected about -6 dB at 1 kHz, got {:.3}",
+        out.magnitude_db[idx]
+    );
+}
+
+#[test]
+fn prediction_preserves_coherence_untouched() {
+    let trace = flat_trace();
+    let out = predict_with_eq(&trace, &[peaking(1000.0, 6.0, 1.0)], FS);
+    assert_eq!(
+        out.coherence, trace.coherence,
+        "EQ does not change measurement confidence"
+    );
+}

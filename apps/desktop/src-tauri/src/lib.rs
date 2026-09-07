@@ -69,6 +69,8 @@ pub fn run() {
             commands::get_available_reference_curves,
             commands::get_reference_curve,
             commands::get_reference_curve_at_frequencies,
+            // Virtual EQ commands
+            commands::predict_eq,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -4,6 +4,7 @@
 //! biquad coefficients. No audio is processed: the prediction is exact and
 //! instant, and every part of it is a pure function.
 
+use crate::dsp::TransferFunctionData;
 use realfft::num_complex::Complex;
 use serde::{Deserialize, Serialize};
 use std::f32::consts::PI;
@@ -139,4 +140,40 @@ pub fn bank_response(
             })
         })
         .collect()
+}
+
+/// Apply a filter bank to a measured trace and return the predicted result.
+/// Coherence is carried through untouched: EQ changes the response, not the
+/// confidence with which the response was measured.
+pub fn predict_with_eq(
+    trace: &TransferFunctionData,
+    filters: &[BiquadFilter],
+    sample_rate: f32,
+) -> TransferFunctionData {
+    let eq = bank_response(filters, &trace.frequencies, sample_rate);
+
+    let mut magnitude_db = Vec::with_capacity(eq.len());
+    let mut phase_deg = Vec::with_capacity(eq.len());
+
+    for (i, h_eq) in eq.iter().enumerate() {
+        let gain_db = 20.0 * h_eq.norm().max(1e-10).log10();
+        magnitude_db.push(trace.magnitude_db[i] + gain_db);
+
+        let mut phase = trace.phase_deg[i] + h_eq.arg().to_degrees();
+        while phase > 180.0 {
+            phase -= 360.0;
+        }
+        while phase < -180.0 {
+            phase += 360.0;
+        }
+        phase_deg.push(phase);
+    }
+
+    TransferFunctionData {
+        magnitude_db,
+        phase_deg,
+        coherence: trace.coherence.clone(),
+        group_delay_ms: trace.group_delay_ms.clone(),
+        frequencies: trace.frequencies.clone(),
+    }
 }
