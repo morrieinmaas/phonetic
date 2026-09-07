@@ -18,6 +18,28 @@ pub fn log_frequency_axis(f_min: f32, f_max: f32, points_per_octave: usize) -> V
     (0..=count).map(|i| f_min * ratio.powi(i as i32)).collect()
 }
 
+/// FFT length paired with the upper frequency bound it serves, longest first.
+/// Chosen so every band holds at least four cycles of its lowest frequency at
+/// 48 kHz, which is the floor below which a transfer function stops meaning
+/// anything.
+pub const RESOLUTION_BANDS: [(usize, f32); 6] = [
+    (16384, 100.0),
+    (8192, 200.0),
+    (4096, 400.0),
+    (2048, 800.0),
+    (1024, 1600.0),
+    (512, f32::INFINITY),
+];
+
+/// FFT length serving `freq_hz`.
+pub fn band_for_frequency(freq_hz: f32) -> usize {
+    RESOLUTION_BANDS
+        .iter()
+        .find(|(_, upper)| freq_hz < *upper)
+        .map(|(size, _)| *size)
+        .unwrap_or(512)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -49,6 +71,53 @@ mod tests {
                 w[0],
                 w[1]
             );
+        }
+    }
+
+    #[test]
+    fn low_frequencies_get_the_longest_fft() {
+        assert_eq!(
+            band_for_frequency(30.0),
+            16384,
+            "30 Hz needs the longest window"
+        );
+        assert_eq!(band_for_frequency(60.0), 16384);
+        assert_eq!(
+            band_for_frequency(10_000.0),
+            512,
+            "10 kHz needs the shortest"
+        );
+    }
+
+    #[test]
+    fn band_assignment_is_monotonic() {
+        let mut previous = usize::MAX;
+        let mut f = 20.0_f32;
+        while f < 20_000.0 {
+            let size = band_for_frequency(f);
+            assert!(
+                size <= previous,
+                "FFT size must not grow with frequency at {f} Hz"
+            );
+            previous = size;
+            f *= 1.05;
+        }
+    }
+
+    /// The point of the exercise: enough cycles inside every window to resolve the
+    /// frequency. Below about 4 cycles a measurement is meaningless.
+    #[test]
+    fn every_band_holds_at_least_four_cycles_at_its_lowest_frequency() {
+        let sample_rate = 48_000.0_f32;
+        let mut lower = 20.0_f32;
+        for (fft_size, upper) in RESOLUTION_BANDS {
+            let window_seconds = fft_size as f32 / sample_rate;
+            let cycles = lower * window_seconds;
+            assert!(
+                cycles >= 4.0,
+                "{fft_size}-point window holds only {cycles:.1} cycles at {lower} Hz"
+            );
+            lower = upper;
         }
     }
 }
