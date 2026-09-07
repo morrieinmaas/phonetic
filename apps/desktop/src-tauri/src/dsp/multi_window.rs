@@ -6,6 +6,9 @@
 //! constant resolution in *octaves* rather than in hertz, which is how hearing and
 //! loudspeaker behaviour actually work.
 
+use crate::dsp::{TransferFunctionData, TransferFunctionProcessor};
+use realfft::num_complex::Complex;
+
 /// Output resolution of the stitched axis. 48 per octave is finer than any display
 /// needs and leaves headroom for smoothing to average over.
 pub const POINTS_PER_OCTAVE: usize = 48;
@@ -120,4 +123,138 @@ mod tests {
             lower = upper;
         }
     }
+}
+
+/// Lowest and highest frequency the stitched output covers.
+const F_MIN: f32 = 20.0;
+const F_MAX: f32 = 20_000.0;
+
+/// Runs one `TransferFunctionProcessor` per resolution band and stitches their
+/// outputs onto a shared log-spaced axis.
+pub struct MultiWindowProcessor {
+    processors: Vec<TransferFunctionProcessor>,
+    frequencies: Vec<f32>,
+    /// Index into `processors` for each output frequency, precomputed.
+    source: Vec<usize>,
+    sample_rate: f32,
+}
+
+impl MultiWindowProcessor {
+    pub fn new(sample_rate: f32) -> Self {
+        let processors = RESOLUTION_BANDS
+            .iter()
+            .map(|(size, _)| TransferFunctionProcessor::new(*size, sample_rate))
+            .collect();
+
+        let frequencies = log_frequency_axis(F_MIN, F_MAX, POINTS_PER_OCTAVE);
+
+        let source = frequencies
+            .iter()
+            .map(|&f| {
+                let size = band_for_frequency(f);
+                RESOLUTION_BANDS
+                    .iter()
+                    .position(|(s, _)| *s == size)
+                    .unwrap_or(0)
+            })
+            .collect();
+
+        Self {
+            processors,
+            frequencies,
+            source,
+            sample_rate,
+        }
+    }
+
+    /// Feed the same samples to every resolution. Each keeps its own accumulator
+    /// and produces a frame whenever it has enough samples.
+    pub fn process(&mut self, measurement: &[f32], reference: &[f32]) {
+        for p in &mut self.processors {
+            p.process(measurement, reference);
+        }
+    }
+
+    pub fn reset_averaging(&mut self) {
+        for p in &mut self.processors {
+            p.reset_averaging();
+        }
+    }
+
+    /// Linear interpolation of a processor's complex H at an arbitrary frequency.
+    /// Interpolating H rather than dB and degrees keeps phase continuous through
+    /// wrap points.
+    fn sample_at(
+        p: &TransferFunctionProcessor,
+        freq: f32,
+        sample_rate: f32,
+    ) -> (Complex<f32>, f32) {
+        let bin_width = sample_rate / p.fft_size() as f32;
+        let exact = freq / bin_width;
+        let lo = exact.floor() as usize;
+        let last = p.h().len() - 1;
+
+        if lo >= last {
+            return (p.h()[last], p.get_coherence()[last]);
+        }
+
+        let frac = exact - lo as f32;
+        let h = p.h()[lo] * (1.0 - frac) + p.h()[lo + 1] * frac;
+        let coh = p.get_coherence()[lo] * (1.0 - frac) + p.get_coherence()[lo + 1] * frac;
+        (h, coh)
+    }
+
+    pub fn get_data(&self) -> TransferFunctionData {
+        let n = self.frequencies.len();
+        let mut magnitude_db = vec![-120.0; n];
+        let mut phase_deg = vec![0.0; n];
+        let mut coherence = vec![0.0; n];
+
+        for i in 0..n {
+            let p = &self.processors[self.source[i]];
+            let (h, coh) = Self::sample_at(p, self.frequencies[i], self.sample_rate);
+
+            let mag = h.norm();
+            magnitude_db[i] = if mag > 1e-10 {
+                20.0 * mag.log10()
+            } else {
+                -120.0
+            };
+            phase_deg[i] = h.arg().to_degrees();
+            coherence[i] = coh.clamp(0.0, 1.0);
+        }
+
+        let group_delay_ms = group_delay_from_log_axis(&self.frequencies, &phase_deg);
+
+        TransferFunctionData {
+            magnitude_db,
+            phase_deg,
+            coherence,
+            group_delay_ms,
+            frequencies: self.frequencies.clone(),
+        }
+    }
+}
+
+/// Group delay on a non-uniform axis. Phase must be unwrapped locally before
+/// differentiating, since the displayed phase is wrapped.
+fn group_delay_from_log_axis(freqs: &[f32], phase_deg: &[f32]) -> Vec<f32> {
+    let mut out = vec![0.0; freqs.len()];
+    for i in 1..freqs.len().saturating_sub(1) {
+        let mut dphi = phase_deg[i + 1] - phase_deg[i - 1];
+        // Undo a single wrap across the interval.
+        while dphi > 180.0 {
+            dphi -= 360.0;
+        }
+        while dphi < -180.0 {
+            dphi += 360.0;
+        }
+        let df = freqs[i + 1] - freqs[i - 1];
+        out[i] = if df > 0.0 {
+            -dphi / (360.0 * df) * 1000.0
+        } else {
+            0.0
+        };
+    }
+    out
 }

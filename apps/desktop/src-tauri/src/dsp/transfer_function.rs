@@ -331,7 +331,6 @@ impl TransferFunctionProcessor {
     }
 
     /// Get current FFT size
-    #[allow(dead_code)]
     pub fn fft_size(&self) -> usize {
         self.fft_size
     }
