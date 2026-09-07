@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { applyPan, applyZoom, pixelToLogFrequency } from "../lib/plot-scales";
 
 interface WebGLSpectrumProps {
 	spectrumData: number[];
@@ -86,6 +87,9 @@ const dbToY = (db: number, height: number, minDb = -120, maxDb = 0): number => {
 	return height * (1 - Math.max(0, Math.min(1, normalized)));
 };
 
+/** Full frequency range of the plot, and the limit that zoom/pan gestures cannot cross. */
+const FREQ_LIMITS: [number, number] = [20, 20000];
+
 // Create and compile a shader
 const createShader = (
 	gl: WebGLRenderingContext,
@@ -138,6 +142,8 @@ export const WebGLSpectrum = ({
 }: WebGLSpectrumProps) => {
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 	const peakCanvasRef = useRef<HTMLCanvasElement>(null);
+	const plotContainerRef = useRef<HTMLDivElement>(null);
+	const freqRangeRef = useRef<[number, number]>(FREQ_LIMITS);
 	const glRef = useRef<WebGLRenderingContext | null>(null);
 	const programRef = useRef<WebGLProgram | null>(null);
 	const positionBufferRef = useRef<WebGLBuffer | null>(null);
@@ -317,8 +323,8 @@ export const WebGLSpectrum = ({
 			const db = count > 0 ? sum / count : MIN_DB;
 			logDbValues.push(db);
 
-			const x1 = freqToX(freq, width);
-			const x2 = freqToX(nextFreq, width);
+			const x1 = freqToX(freq, width, freqRangeRef.current[0], freqRangeRef.current[1]);
+			const x2 = freqToX(nextFreq, width, freqRangeRef.current[0], freqRangeRef.current[1]);
 			const y1 = height;
 			const y2 = dbToY(db, height, MIN_DB, MAX_DB);
 
@@ -377,7 +383,7 @@ export const WebGLSpectrum = ({
 					const freq = logFreqs[i];
 					if (freq === undefined) continue;
 
-					const x = freqToX(freq, width);
+					const x = freqToX(freq, width, freqRangeRef.current[0], freqRangeRef.current[1]);
 					const y = dbToY(peakHoldRef.current[i] ?? -120, height, MIN_DB, MAX_DB);
 
 					if (i === 0) {
@@ -429,6 +435,37 @@ export const WebGLSpectrum = ({
 		}
 	}, [spectrumData, isRunning, renderSpectrum]);
 
+	// Trackpad gestures: ctrl+wheel pinch zooms about the pointer, plain wheel pans.
+	useEffect(() => {
+		const container = plotContainerRef.current;
+		if (!container) return;
+
+		const handleWheel = (event: WheelEvent) => {
+			event.preventDefault();
+
+			const rect = container.getBoundingClientRect();
+			const width = rect.width || 1;
+			const pointerX = event.clientX - rect.left;
+			const [lo, hi] = freqRangeRef.current;
+			const anchor = pixelToLogFrequency(pointerX, width, lo, hi);
+
+			freqRangeRef.current = event.ctrlKey
+				? applyZoom(freqRangeRef.current, Math.exp(event.deltaY * 0.01), anchor, FREQ_LIMITS)
+				: applyPan(freqRangeRef.current, (event.deltaX || event.deltaY) / width, FREQ_LIMITS);
+
+			requestAnimationFrame(renderSpectrum);
+		};
+
+		container.addEventListener("wheel", handleWheel, { passive: false });
+		return () => container.removeEventListener("wheel", handleWheel);
+	}, [renderSpectrum]);
+
+	// Double-click resets the plot back to the full frequency range.
+	const handleResetZoom = useCallback(() => {
+		freqRangeRef.current = FREQ_LIMITS;
+		requestAnimationFrame(renderSpectrum);
+	}, [renderSpectrum]);
+
 	return (
 		<div className="flex flex-col h-full min-h-0">
 			<div className="flex items-center justify-between mb-2 flex-shrink-0">
@@ -465,7 +502,9 @@ export const WebGLSpectrum = ({
 				</div>
 			</div>
 			<div
+				ref={plotContainerRef}
 				className={`flex-1 min-h-[280px] relative rounded-lg overflow-hidden ${themeColors.containerBg}`}
+				onDoubleClick={handleResetZoom}
 			>
 				<canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
 				<canvas

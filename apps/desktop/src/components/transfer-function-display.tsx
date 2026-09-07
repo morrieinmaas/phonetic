@@ -1,7 +1,15 @@
+import type { MouseEvent as ReactMouseEvent } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import { useShallow } from "zustand/shallow";
+import {
+	type CursorSample,
+	applyPan,
+	applyZoom,
+	nearestIndex,
+	pixelToLogFrequency,
+} from "../lib/plot-scales";
 import { useTraceStore } from "../stores/trace-store";
 import type {
 	ReferenceCurve,
@@ -9,6 +17,7 @@ import type {
 	StoredTrace,
 	TransferFunctionData,
 } from "../types/audio";
+import { CursorReadout } from "./cursor-readout";
 import { ReferenceCurveSelector } from "./reference-curve-selector";
 import { TraceControls } from "./trace-controls";
 
@@ -20,6 +29,12 @@ interface TransferFunctionDisplayProps {
 
 /** Maximum number of stored traces that can be displayed simultaneously */
 const MAX_DISPLAYED_TRACES = 4;
+
+/** Full frequency range of the plot, and the limit that zoom/pan gestures cannot cross. */
+const FREQ_LIMITS: [number, number] = [20, 20000];
+
+const CURSOR_A_COLOR = "#f59e0b";
+const CURSOR_B_COLOR = "#d946ef";
 
 // Map to log frequency scale for display
 const mapToLogScale = (
@@ -91,6 +106,13 @@ export const TransferFunctionDisplay = ({
 	const containerRef = useRef<HTMLDivElement>(null);
 	const chartRef = useRef<uPlot | null>(null);
 	const logFreqsRef = useRef<number[]>([]);
+	const xRangeRef = useRef<[number, number]>(FREQ_LIMITS);
+	const cursorsRef = useRef<{ a: CursorSample | null; b: CursorSample | null }>({
+		a: null,
+		b: null,
+	});
+	const [cursorA, setCursorA] = useState<CursorSample | null>(null);
+	const [cursorB, setCursorB] = useState<CursorSample | null>(null);
 	const [autoZoom, setAutoZoom] = useState(true);
 	const [theme, setTheme] = useState<"dark" | "light">(() =>
 		document.documentElement.classList.contains("dark") ? "dark" : "light",
@@ -183,8 +205,8 @@ export const TransferFunctionDisplay = ({
 					time: false,
 					distr: 2,
 					log: 10,
-					min: 20,
-					max: 20000,
+					min: xRangeRef.current[0],
+					max: xRangeRef.current[1],
 				},
 				magnitude: {
 					auto: false,
@@ -241,6 +263,30 @@ export const TransferFunctionDisplay = ({
 				},
 			],
 			series,
+			hooks: {
+				draw: [
+					(u) => {
+						const drawCursorLine = (sample: CursorSample | null, color: string) => {
+							if (!sample) return;
+							const x = u.valToPos(sample.frequencyHz, "x", true);
+							if (x < u.bbox.left || x > u.bbox.left + u.bbox.width) return;
+
+							u.ctx.save();
+							u.ctx.strokeStyle = color;
+							u.ctx.lineWidth = 1;
+							u.ctx.setLineDash([4, 3]);
+							u.ctx.beginPath();
+							u.ctx.moveTo(x, u.bbox.top);
+							u.ctx.lineTo(x, u.bbox.top + u.bbox.height);
+							u.ctx.stroke();
+							u.ctx.restore();
+						};
+
+						drawCursorLine(cursorsRef.current.a, CURSOR_A_COLOR);
+						drawCursorLine(cursorsRef.current.b, CURSOR_B_COLOR);
+					},
+				],
+			},
 		};
 
 		// Build initial data array
@@ -279,6 +325,73 @@ export const TransferFunctionDisplay = ({
 			chartRef.current = null;
 		};
 	}, [theme, visibleTraces]);
+
+	// Keep the cursor draw hook's ref in sync and trigger a redraw without rebuilding the chart.
+	useEffect(() => {
+		cursorsRef.current = { a: cursorA, b: cursorB };
+		chartRef.current?.redraw();
+	}, [cursorA, cursorB]);
+
+	// Trackpad gestures: ctrl+wheel pinch zooms about the pointer, plain wheel pans.
+	useEffect(() => {
+		const container = containerRef.current;
+		if (!container) return;
+
+		const handleWheel = (event: WheelEvent) => {
+			if (!chartRef.current) return;
+			event.preventDefault();
+
+			const rect = container.getBoundingClientRect();
+			const width = rect.width || 1;
+			const pointerX = event.clientX - rect.left;
+			const [lo, hi] = xRangeRef.current;
+			const anchor = pixelToLogFrequency(pointerX, width, lo, hi);
+
+			xRangeRef.current = event.ctrlKey
+				? applyZoom(xRangeRef.current, Math.exp(event.deltaY * 0.01), anchor, FREQ_LIMITS)
+				: applyPan(xRangeRef.current, (event.deltaX || event.deltaY) / width, FREQ_LIMITS);
+
+			chartRef.current.setScale("x", { min: xRangeRef.current[0], max: xRangeRef.current[1] });
+		};
+
+		container.addEventListener("wheel", handleWheel, { passive: false });
+		return () => container.removeEventListener("wheel", handleWheel);
+	}, []);
+
+	// Place cursor A on click, cursor B on shift-click, by sampling the nearest measured point.
+	const handlePlotClick = useCallback(
+		(event: ReactMouseEvent<HTMLDivElement>) => {
+			if (!data || !isRunning || !containerRef.current) return;
+
+			const rect = containerRef.current.getBoundingClientRect();
+			const width = rect.width || 1;
+			const x = event.clientX - rect.left;
+			const [lo, hi] = xRangeRef.current;
+			const freq = pixelToLogFrequency(x, width, lo, hi);
+
+			const idx = nearestIndex(data.frequencies, freq);
+			if (idx === -1) return;
+
+			const sample: CursorSample = {
+				frequencyHz: data.frequencies[idx] ?? freq,
+				magnitudeDb: data.magnitude_db[idx] ?? 0,
+				groupDelayMs: data.group_delay_ms[idx] ?? 0,
+			};
+
+			if (event.shiftKey) {
+				setCursorB(sample);
+			} else {
+				setCursorA(sample);
+			}
+		},
+		[data, isRunning],
+	);
+
+	// Double-click resets the plot back to the full frequency range.
+	const handleResetZoom = useCallback(() => {
+		xRangeRef.current = FREQ_LIMITS;
+		chartRef.current?.setScale("x", { min: FREQ_LIMITS[0], max: FREQ_LIMITS[1] });
+	}, []);
 
 	// Map reference curve to log frequency scale
 	const getRefCurveValues = useCallback((): (number | null)[] => {
@@ -430,12 +543,22 @@ export const TransferFunctionDisplay = ({
 					</button>
 				</div>
 			</div>
-			<div ref={containerRef} className="flex-1 min-h-[220px] relative">
+			{/* biome-ignore lint/a11y/useKeyWithClickEvents: pointer-only cursor placement on a continuous log-frequency plot has no meaningful keyboard equivalent */}
+			<div
+				ref={containerRef}
+				data-testid="transfer-function-plot"
+				className="flex-1 min-h-[220px] relative"
+				onClick={handlePlotClick}
+				onDoubleClick={handleResetZoom}
+			>
 				{!isRunning && visibleTraces.length === 0 && (
 					<div className="absolute inset-0 flex items-center justify-center text-muted-foreground bg-background/50 z-10">
 						Start audio stream and generator to measure transfer function
 					</div>
 				)}
+			</div>
+			<div className="mt-2 flex-shrink-0">
+				<CursorReadout cursorA={cursorA} cursorB={cursorB} />
 			</div>
 			<div className="flex gap-4 mt-2 text-xs text-muted-foreground flex-shrink-0 flex-wrap">
 				<span className="flex items-center gap-1">
