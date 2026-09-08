@@ -2,6 +2,7 @@ pub mod audio;
 pub mod cli;
 mod commands;
 pub mod dsp;
+pub mod licensing;
 
 use tauri::Manager;
 
