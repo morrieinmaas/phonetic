@@ -4,7 +4,7 @@ use crate::audio::{
     enumerate_devices, AudioBackend, AudioDeviceList, AudioEngine, AudioState, SignalType,
 };
 use crate::dsp::{
-    diagnose, export_impulse_response_csv, export_impulse_response_json,
+    bin_frequencies, diagnose, export_impulse_response_csv, export_impulse_response_json,
     export_impulse_response_txt, export_transfer_function_csv, export_transfer_function_json,
     export_transfer_function_txt, generate_standard_frequencies, octave_band_levels,
     predict_with_eq, rate, write_to_file, BiquadFilter, CurveFamily, DelayFinder, DelayResult,
@@ -418,10 +418,10 @@ fn get_room_criteria_inner(
     family: CurveFamily,
 ) -> Result<RoomCriteriaResult, String> {
     let spectrum_dbfs = engine.get_spectrum_data();
-    let sample_rate = engine.sample_rate() as f32;
-    let frequencies: Vec<f32> = (0..spectrum_dbfs.len())
-        .map(|i| i as f32 * sample_rate / FFT_SIZE as f32)
-        .collect();
+    // Derive the axis from the spectrum's own bin count, not from FFT_SIZE:
+    // set_fft_size() resizes the spectrum processor, so a hardcoded size
+    // mislabels the whole axis and puts every octave band in the wrong place.
+    let frequencies = bin_frequencies(spectrum_dbfs.len(), engine.sample_rate() as f32);
 
     // Calibrate under the lock, then drop the guard before the octave-band
     // summing and rating: no lock held across expensive work.
