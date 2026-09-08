@@ -46,6 +46,9 @@ pub fn run() {
             commands::set_transfer_function_delay,
             commands::get_transfer_function_delay,
             commands::set_max_averages,
+            commands::set_resolution_mode,
+            commands::is_multi_window,
+            commands::set_smoothing,
             // Delay finder commands
             commands::find_delay,
             commands::set_delay_finder_max_delay,

@@ -7,6 +7,7 @@ import type {
 	ReferenceCurveInfo,
 	ReferenceCurveType,
 	SignalType,
+	SmoothingFraction,
 } from "../types/audio";
 
 /** Transfer function measurement data */
@@ -141,6 +142,27 @@ export const audioApi = {
 	 * @param count - Averaging depth in frames
 	 */
 	setMaxAverages: (count: number): Promise<void> => invoke("set_max_averages", { count }),
+
+	/**
+	 * Switch between the single-FFT processor and the multi-time-window one.
+	 * A fixed FFT cannot serve the whole band: 4096 points at 48 kHz gives
+	 * 11.7 Hz resolution, adequate at 10 kHz and useless at 60 Hz.
+	 * @param multiWindow - true for multi-time-window, false for a single FFT
+	 */
+	setResolutionMode: (multiWindow: boolean): Promise<void> =>
+		invoke("set_resolution_mode", { multiWindow }),
+
+	/**
+	 * Whether the multi-time-window processor is currently active
+	 */
+	isMultiWindow: (): Promise<boolean> => invoke<boolean>("is_multi_window"),
+
+	/**
+	 * Set fractional-octave smoothing on the multi-time-window output
+	 * @param fraction - Smoothing width, or "none"
+	 */
+	setSmoothing: (fraction: SmoothingFraction): Promise<void> =>
+		invoke("set_smoothing", { fraction }),
 
 	/**
 	 * Set audio backend (requires stream to be stopped)

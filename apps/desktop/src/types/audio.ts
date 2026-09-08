@@ -90,3 +90,13 @@ export interface StoredTrace {
 
 /** Trace slot identifiers for quick A/B comparison */
 export type TraceSlot = "A" | "B" | "C" | "D";
+
+/** Fractional-octave smoothing applied to the multi-time-window transfer function. */
+export type SmoothingFraction =
+	| "none"
+	| "octave1"
+	| "octave3"
+	| "octave6"
+	| "octave12"
+	| "octave24"
+	| "octave48";

@@ -482,7 +482,10 @@ fn multi_window_resolves_low_frequencies_a_single_fft_cannot() {
         worst = worst.max((d.magnitude_db[i] - expect).abs());
     }
 
-    assert!(worst < 1.0, "worst magnitude error {worst:.3} dB across 25 Hz-15 kHz");
+    assert!(
+        worst < 1.0,
+        "worst magnitude error {worst:.3} dB across 25 Hz-15 kHz"
+    );
 }
 
 #[test]

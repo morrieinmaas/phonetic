@@ -61,6 +61,7 @@ can read off against the maths.
 | Pure delay (1 ms) | flat 1.00 ms group delay | 0.05 ms | ✅ pass |
 | A-weighting | IEC 61672-1 Table 3, 8 frequencies | 0.2 dB | ✅ pass |
 | RT60 estimation | synthesised T60 = 200 ms | 10% | ✅ pass |
+| Multi-window LF resolution | `H(ω)` of a one-pole at 25 Hz | 1.0 dB | ✅ pass |
 
 The fourth row is the load-bearing one. A one-pole lowpass has an exact closed-form magnitude
 and phase response. Recovering it to within 0.5 dB and 2° across the audio band means the
@@ -77,14 +78,6 @@ Run them yourself:
 just test-rust                                  # full suite
 cargo test --test dsp_accuracy -- --nocapture   # accuracy suite only
 ```
-
-### Known limitations
-
-Honesty cuts both ways. This one is documented in the test suite itself rather than left for you
-to discover on a show site:
-
-- **Fixed single FFT length.** There is no multi-time-window or fractional-octave smoothing yet,
-  so low-frequency resolution is limited by the chosen FFT size (11.7 Hz at 4096 / 48 kHz).
 
 ## Tech Stack
 

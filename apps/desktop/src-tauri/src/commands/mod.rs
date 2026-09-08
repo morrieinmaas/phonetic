@@ -8,7 +8,8 @@ use crate::dsp::{
     export_transfer_function_csv, export_transfer_function_json, export_transfer_function_txt,
     generate_standard_frequencies, predict_with_eq, write_to_file, BiquadFilter, DelayFinder,
     DelayResult, ExportFormat, ImpulseResponseData, ImpulseResponseProcessor, MeasurementMetadata,
-    MicrophoneCalibration, ReferenceCurve, ReferenceCurveType, SplCalculator, TransferFunctionData,
+    MicrophoneCalibration, ReferenceCurve, ReferenceCurveType, SmoothingFraction, SplCalculator,
+    TransferFunctionData,
 };
 use parking_lot::Mutex;
 
@@ -182,6 +183,21 @@ pub fn get_transfer_function_delay(engine: State<'_, AudioEngine>) -> usize {
 #[tauri::command]
 pub fn set_max_averages(engine: State<'_, AudioEngine>, count: usize) {
     engine.set_max_averages(count);
+}
+
+#[tauri::command]
+pub fn set_resolution_mode(engine: State<'_, AudioEngine>, multi_window: bool) {
+    engine.set_resolution_mode(multi_window);
+}
+
+#[tauri::command]
+pub fn is_multi_window(engine: State<'_, AudioEngine>) -> bool {
+    engine.is_multi_window()
+}
+
+#[tauri::command]
+pub fn set_smoothing(engine: State<'_, AudioEngine>, fraction: SmoothingFraction) {
+    engine.set_smoothing(fraction);
 }
 
 // ============================================================================

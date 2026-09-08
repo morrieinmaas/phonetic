@@ -8,7 +8,10 @@ use std::thread;
 
 use super::generator::{Generator, SignalType};
 use super::realtime::configure_audio_thread;
-use crate::dsp::{FftProcessor, TransferFunctionData, TransferFunctionProcessor};
+use crate::dsp::{
+    FftProcessor, MultiWindowProcessor, SmoothingFraction, TransferFunctionData,
+    TransferFunctionProcessor,
+};
 
 #[cfg(target_os = "macos")]
 use super::coreaudio_backend::{
@@ -65,6 +68,9 @@ pub struct AudioEngine {
     output_device_name: Arc<Mutex<Option<String>>>,
     fft_processor: Arc<Mutex<FftProcessor>>,
     transfer_function_processor: Arc<Mutex<TransferFunctionProcessor>>,
+    multi_window_processor: Arc<Mutex<MultiWindowProcessor>>,
+    // Whether the multi-time-window processor (vs. the single-FFT processor) is active
+    multi_window_enabled: Arc<AtomicBool>,
     generator: Arc<Mutex<Generator>>,
     generator_active: Arc<AtomicBool>,
     stop_signal: Arc<AtomicBool>,
@@ -81,8 +87,8 @@ pub struct AudioEngine {
 // - All atomic fields (is_running, sample_rate, buffer_size, generator_active, stop_signal)
 //   are inherently thread-safe via std::sync::atomic
 // - All Mutex-wrapped fields (input_device_name, output_device_name, fft_processor,
-//   transfer_function_processor, generator, thread_handle, reference_buffer)
-//   use parking_lot::Mutex which is Send + Sync
+//   transfer_function_processor, multi_window_processor, generator, thread_handle,
+//   reference_buffer) use parking_lot::Mutex which is Send + Sync
 // - Arc provides thread-safe reference counting
 // The thread_handle stores a JoinHandle which is Send, and we only mutate it under a Mutex lock.
 // cpal::Stream is not Send+Sync, but we don't store streams - they live in the audio thread only.
@@ -96,6 +102,8 @@ impl AudioEngine {
             FFT_SIZE,
             DEFAULT_SAMPLE_RATE,
         )));
+        let multi_window_processor =
+            Arc::new(Mutex::new(MultiWindowProcessor::new(DEFAULT_SAMPLE_RATE)));
         let generator = Arc::new(Mutex::new(Generator::new(DEFAULT_SAMPLE_RATE as f64)));
 
         Self {
@@ -106,6 +114,8 @@ impl AudioEngine {
             output_device_name: Arc::new(Mutex::new(None)),
             fft_processor,
             transfer_function_processor,
+            multi_window_processor,
+            multi_window_enabled: Arc::new(AtomicBool::new(false)),
             generator,
             generator_active: Arc::new(AtomicBool::new(false)),
             stop_signal: Arc::new(AtomicBool::new(false)),
@@ -256,6 +266,8 @@ impl AudioEngine {
         // Clone Arcs for the audio thread
         let fft_processor = Arc::clone(&self.fft_processor);
         let transfer_function_processor = Arc::clone(&self.transfer_function_processor);
+        let multi_window_processor = Arc::clone(&self.multi_window_processor);
+        let multi_window_enabled = Arc::clone(&self.multi_window_enabled);
         let generator = Arc::clone(&self.generator);
         let generator_active = Arc::clone(&self.generator_active);
         let is_running = Arc::clone(&self.is_running);
@@ -274,6 +286,8 @@ impl AudioEngine {
                 output_channels,
                 fft_processor,
                 transfer_function_processor,
+                multi_window_processor,
+                multi_window_enabled,
                 generator,
                 generator_active,
                 is_running,
@@ -373,6 +387,8 @@ impl AudioEngine {
         // Clone Arcs for the audio thread
         let fft_processor = Arc::clone(&self.fft_processor);
         let transfer_function_processor = Arc::clone(&self.transfer_function_processor);
+        let multi_window_processor = Arc::clone(&self.multi_window_processor);
+        let multi_window_enabled = Arc::clone(&self.multi_window_enabled);
         let generator = Arc::clone(&self.generator);
         let generator_active = Arc::clone(&self.generator_active);
         let is_running = Arc::clone(&self.is_running);
@@ -390,6 +406,8 @@ impl AudioEngine {
                 exclusive_mode,
                 fft_processor,
                 transfer_function_processor,
+                multi_window_processor,
+                multi_window_enabled,
                 generator,
                 generator_active,
                 is_running,
@@ -450,11 +468,16 @@ impl AudioEngine {
     }
 
     pub fn get_transfer_function_data(&self) -> TransferFunctionData {
-        self.transfer_function_processor.lock().get_data()
+        if self.multi_window_enabled.load(Ordering::Relaxed) {
+            self.multi_window_processor.lock().get_data()
+        } else {
+            self.transfer_function_processor.lock().get_data()
+        }
     }
 
     pub fn reset_averaging(&self) {
         self.transfer_function_processor.lock().reset_averaging();
+        self.multi_window_processor.lock().reset_averaging();
         log::info!("Transfer function averaging reset");
     }
 
@@ -484,6 +507,9 @@ impl AudioEngine {
         self.transfer_function_processor
             .lock()
             .set_delay_samples(delay_samples);
+        self.multi_window_processor
+            .lock()
+            .set_delay_samples(delay_samples);
     }
 
     /// Current transfer function reference delay in samples.
@@ -494,6 +520,31 @@ impl AudioEngine {
     /// Frames retained by the transfer function running average.
     pub fn set_max_averages(&self, n: usize) {
         self.transfer_function_processor.lock().set_max_averages(n);
+        self.multi_window_processor.lock().set_max_averages(n);
+    }
+
+    /// Switch between the single-FFT processor and the multi-time-window one.
+    /// A fixed FFT cannot serve the whole band: 4096 points at 48 kHz gives
+    /// 11.7 Hz resolution, fine at 10 kHz and useless at 60 Hz.
+    pub fn set_resolution_mode(&self, multi_window: bool) {
+        self.multi_window_enabled
+            .store(multi_window, Ordering::Relaxed);
+        log::info!("Resolution mode: multi_window={}", multi_window);
+    }
+
+    /// Whether the multi-time-window processor is currently active.
+    pub fn is_multi_window(&self) -> bool {
+        self.multi_window_enabled.load(Ordering::Relaxed)
+    }
+
+    /// Fractional-octave smoothing applied to the multi-window output.
+    pub fn set_smoothing(&self, fraction: SmoothingFraction) {
+        self.multi_window_processor.lock().set_smoothing(fraction);
+    }
+
+    /// Current smoothing setting.
+    pub fn smoothing(&self) -> SmoothingFraction {
+        self.multi_window_processor.lock().smoothing()
     }
 }
 
@@ -534,6 +585,8 @@ fn run_cpal_streams(
     output_channels: u16,
     fft_processor: Arc<Mutex<FftProcessor>>,
     transfer_function_processor: Arc<Mutex<TransferFunctionProcessor>>,
+    multi_window_processor: Arc<Mutex<MultiWindowProcessor>>,
+    multi_window_enabled: Arc<AtomicBool>,
     generator: Arc<Mutex<Generator>>,
     generator_active: Arc<AtomicBool>,
     is_running: Arc<AtomicBool>,
@@ -557,6 +610,8 @@ fn run_cpal_streams(
 
     // Clone references for input callback
     let tf_processor = Arc::clone(&transfer_function_processor);
+    let mw_processor = Arc::clone(&multi_window_processor);
+    let mw_enabled = Arc::clone(&multi_window_enabled);
     let ref_buffer_for_input = Arc::clone(&reference_buffer);
 
     // Build input stream
@@ -580,8 +635,13 @@ fn run_cpal_streams(
             }
 
             // Process transfer function
-            let mut tf_proc = tf_processor.lock();
-            tf_proc.process(data, &ref_data);
+            // Route to whichever resolution mode is active. Both processors keep
+            // their own state, so switching modes never loses the other's averages.
+            if mw_enabled.load(Ordering::Relaxed) {
+                mw_processor.lock().process(data, &ref_data);
+            } else {
+                tf_processor.lock().process(data, &ref_data);
+            }
         },
         |err| log::error!("Input stream error: {}", err),
         None,
@@ -673,6 +733,8 @@ fn run_coreaudio_streams(
     exclusive_mode: bool,
     fft_processor: Arc<Mutex<FftProcessor>>,
     transfer_function_processor: Arc<Mutex<TransferFunctionProcessor>>,
+    multi_window_processor: Arc<Mutex<MultiWindowProcessor>>,
+    multi_window_enabled: Arc<AtomicBool>,
     generator: Arc<Mutex<Generator>>,
     generator_active: Arc<AtomicBool>,
     is_running: Arc<AtomicBool>,
@@ -691,6 +753,8 @@ fn run_coreaudio_streams(
 
     // Clone references for input callback
     let tf_processor = Arc::clone(&transfer_function_processor);
+    let mw_processor = Arc::clone(&multi_window_processor);
+    let mw_enabled = Arc::clone(&multi_window_enabled);
     let ref_buffer_for_input = Arc::clone(&reference_buffer);
     let fft_proc_clone = Arc::clone(&fft_processor);
 
@@ -714,8 +778,13 @@ fn run_coreaudio_streams(
                 }
             }
 
-            let mut tf_proc = tf_processor.lock();
-            tf_proc.process(data, &ref_data);
+            // Route to whichever resolution mode is active. Both processors keep
+            // their own state, so switching modes never loses the other's averages.
+            if mw_enabled.load(Ordering::Relaxed) {
+                mw_processor.lock().process(data, &ref_data);
+            } else {
+                tf_processor.lock().process(data, &ref_data);
+            }
         },
     ) {
         Ok(s) => s,

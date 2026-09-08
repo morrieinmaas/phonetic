@@ -109,6 +109,29 @@ mod tests {
         }
     }
 
+    /// Delay compensation and averaging depth must reach every internal
+    /// per-band processor, not just the first one. Without this, switching to
+    /// multi-window mode silently drops the operator's delay compensation.
+    #[test]
+    fn set_delay_samples_and_max_averages_reach_every_sub_processor() {
+        let mut mw = MultiWindowProcessor::new(48_000.0);
+        mw.set_delay_samples(480);
+        mw.set_max_averages(4);
+
+        for p in &mw.processors {
+            assert_eq!(
+                p.delay_samples(),
+                480,
+                "delay must reach every band's processor"
+            );
+            assert_eq!(
+                p.max_averages(),
+                4,
+                "averaging depth must reach every band's processor"
+            );
+        }
+    }
+
     /// The point of the exercise: enough cycles inside every window to resolve the
     /// frequency. Below about 4 cycles a measurement is meaningless.
     #[test]
@@ -190,6 +213,24 @@ impl MultiWindowProcessor {
     pub fn reset_averaging(&mut self) {
         for p in &mut self.processors {
             p.reset_averaging();
+        }
+    }
+
+    /// Delay the reference signal by `delay` samples before computing every
+    /// band's transfer function, compensating for acoustic propagation time.
+    /// Forwarded to every internal per-band processor so switching resolution
+    /// mode never drops the operator's delay compensation.
+    pub fn set_delay_samples(&mut self, delay: usize) {
+        for p in &mut self.processors {
+            p.set_delay_samples(delay);
+        }
+    }
+
+    /// Number of frames retained by each band's running average. Forwarded to
+    /// every internal per-band processor.
+    pub fn set_max_averages(&mut self, n: usize) {
+        for p in &mut self.processors {
+            p.set_max_averages(n);
         }
     }
 
