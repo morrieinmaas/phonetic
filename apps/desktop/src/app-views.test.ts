@@ -32,7 +32,8 @@ describe("secondary views", () => {
 	});
 
 	it("gives every view a tab label, so none can ship unlabelled", () => {
-		const labels = source.match(/SECONDARY_VIEW_LABELS: Record<SecondaryView, string> = \{[^}]+\}/s)?.[0] ?? "";
+		const labels =
+			source.match(/SECONDARY_VIEW_LABELS: Record<SecondaryView, string> = \{[^}]+\}/s)?.[0] ?? "";
 		for (const view of views) {
 			expect(labels.includes(`${view}:`), `${view} has no tab label`).toBe(true);
 		}
