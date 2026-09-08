@@ -231,9 +231,10 @@ export const SettingsDialog = ({
 					<fieldset className="space-y-2">
 						<legend className="text-sm font-medium text-foreground">FFT Size</legend>
 						<p className="text-xs text-muted-foreground mb-2">
-							Larger = better frequency resolution, slower updates. Current: {selectedFftSize} bins
-							({audioState ? ((audioState.sample_rate / selectedFftSize) * 1000).toFixed(1) : "?"}{" "}
-							ms window)
+							Larger = better frequency resolution, slower updates. Current:{" "}
+							<span data-testid="fft-size-current">{selectedFftSize}</span> bins (
+							{audioState ? ((audioState.sample_rate / selectedFftSize) * 1000).toFixed(1) : "?"} ms
+							window)
 						</p>
 						<div data-testid="fft-size-select" className="grid grid-cols-3 gap-2">
 							{FFT_SIZES.map((size) => (
