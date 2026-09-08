@@ -28,6 +28,38 @@ Modern, Apple Silicon-native audio measurement system. A rival to [AFMG SysTune]
 - Sensitivity and preamp gain compensation
 - Reference curves overlay (ISO 226, X-curve, house curve, weighting curves)
 
+### Room & Noise Analysis
+
+Reached from the **View** tabs above the secondary display.
+
+- **Room Criteria** — NC (ANSI S12.2) and NR (ISO 1996) background-noise ratings
+  by the tangency method: the lowest curve no octave band exceeds, plus the band
+  that determined it. Needs calibrated SPL, so set your microphone calibration
+  first. RC is deliberately not implemented — it is an average of three bands
+  plus a spectral-quality letter, not a tangency rating, and forcing it through
+  the same engine would misreport it.
+- **Channel Matrix** — up to 32 input channels with free assignment. Any input
+  can be a measurement or a reference, multiple measurement pairs run at once,
+  and each pair carries its own delay and calibration offset. A pair may be
+  referenced to the internal generator or to another input.
+- **Noise Dose** — LEQ, LAeq, LCeq, LAFmax, LApeak and LCpeak with continuous
+  CSV logging, plus exposure dose against a configurable limit. Ships two
+  presets, both EU Directive 2003/10/EC exposure action values, each carrying
+  its source and date.
+
+**On the noise limits:** they are user-editable presets, not a legal database.
+Phonetic shows a measured level against the limit you configured; it does not
+issue a compliance verdict and none of this is legal advice. Confirm any figure
+against the regulation or contract that actually binds you.
+
+**On standards:** the A- and C-weighting filters follow the IEC 61672-1 analog
+prototype via a prewarped bilinear transform. They track the reference curve to
+within about 1 dB from 20 Hz to 10 kHz, but deviate by roughly 3 dB at 16 kHz,
+and that residual has not been checked against the standard's Class 1 tolerance
+table. Treat the weighting as nominal, not as certified conformance. The NC and
+NR tables were transcribed from published references rather than the paywalled
+standards themselves; the citations are in `dsp/room_criteria.rs`.
+
 ### Export
 
 - CSV, JSON, and SMAART-compatible TXT formats
