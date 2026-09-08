@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { DeviceSelector } from "./components/device-selector";
+import { DiagnosticsBanner } from "./components/diagnostics-banner";
 import { GeneratorControls } from "./components/generator-controls";
 import { PermissionDialog } from "./components/permission-dialog";
 import { SettingsDialog } from "./components/settings-dialog";
@@ -388,6 +389,7 @@ export const App = () => {
 
 			{/* Footer status bar */}
 			<StatusBar audioState={audioState} error={error} />
+			<DiagnosticsBanner />
 
 			{/* Settings dialog */}
 			<SettingsDialog
