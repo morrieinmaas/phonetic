@@ -112,6 +112,7 @@ export const TransferFunctionDisplay = ({
 	sampleRate,
 }: TransferFunctionDisplayProps) => {
 	const containerRef = useRef<HTMLDivElement>(null);
+	const plotHostRef = useRef<HTMLDivElement>(null);
 	const chartRef = useRef<uPlot | null>(null);
 	const logFreqsRef = useRef<number[]>([]);
 	const xRangeRef = useRef<[number, number]>(FREQ_LIMITS);
@@ -359,23 +360,30 @@ export const TransferFunctionDisplay = ({
 			chartData.push(new Array(numPoints).fill(null));
 		}
 
-		chartRef.current = new uPlot(opts, chartData, container);
+		const host = plotHostRef.current;
+		if (!host) return;
+		chartRef.current = new uPlot(opts, chartData, host);
 
 		// Handle resize
+		// Batched into a frame so a burst of resizes coalesces into one setSize,
+		// and guarded so a zero-sized container (hidden tab, collapsed panel)
+		// never produces a degenerate canvas.
+		let resizeFrame = 0;
 		const resizeObserver = new ResizeObserver((entries) => {
-			for (const entry of entries) {
-				if (chartRef.current && entry.contentRect.width > 0) {
-					chartRef.current.setSize({
-						width: entry.contentRect.width,
-						height: Math.max(entry.contentRect.height, 120),
-					});
-				}
-			}
+			const entry = entries[entries.length - 1];
+			if (!entry) return;
+			const { width, height } = entry.contentRect;
+			if (width <= 0 || height <= 0) return;
+			cancelAnimationFrame(resizeFrame);
+			resizeFrame = requestAnimationFrame(() => {
+				chartRef.current?.setSize({ width, height });
+			});
 		});
 
 		resizeObserver.observe(container);
 
 		return () => {
+			cancelAnimationFrame(resizeFrame);
 			resizeObserver.disconnect();
 			chartRef.current?.destroy();
 			chartRef.current = null;
@@ -635,10 +643,16 @@ export const TransferFunctionDisplay = ({
 			<div
 				ref={containerRef}
 				data-testid="transfer-function-plot"
-				className="relative min-h-0 flex-1"
+				className="relative min-h-0 flex-1 overflow-hidden"
 				onClick={handlePlotClick}
 				onDoubleClick={handleResetZoom}
 			>
+				{/* uPlot mounts here, out of flow, so the canvas can never change the
+				    size of the container being observed. In flow the two fed each
+				    other: canvas resize -> container content height changes ->
+				    ResizeObserver fires -> canvas resize. That loop thrashed layout
+				    and pushed the chart past the panel edge. */}
+				<div ref={plotHostRef} className="absolute inset-0" />
 				{!isRunning && visibleTraces.length === 0 && (
 					<div className="absolute inset-0 flex items-center justify-center text-muted-foreground bg-background/50 z-10">
 						Start audio stream and generator to measure transfer function
