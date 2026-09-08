@@ -297,9 +297,15 @@ impl AudioEngine {
         *self.input_device_name.lock() = Some(input_name.clone());
         *self.output_device_name.lock() = Some(output_name.clone());
 
-        // Update generator and transfer function processor sample rates
+        // Update generator and transfer function processor sample rates.
+        // Both processors must be told: the multi-window one derives its whole
+        // frequency axis from this, so a stale rate silently mislabels every
+        // reading on any device that is not 48 kHz.
         self.generator.lock().set_sample_rate(sample_rate as f64);
         self.transfer_function_processor
+            .lock()
+            .set_sample_rate(sample_rate as f32);
+        self.multi_window_processor
             .lock()
             .set_sample_rate(sample_rate as f32);
 
@@ -420,9 +426,15 @@ impl AudioEngine {
         *self.input_device_name.lock() = Some(input_name.clone());
         *self.output_device_name.lock() = Some(output_name.clone());
 
-        // Update generator and transfer function processor sample rates
+        // Update generator and transfer function processor sample rates.
+        // Both processors must be told: the multi-window one derives its whole
+        // frequency axis from this, so a stale rate silently mislabels every
+        // reading on any device that is not 48 kHz.
         self.generator.lock().set_sample_rate(sample_rate as f64);
         self.transfer_function_processor
+            .lock()
+            .set_sample_rate(sample_rate as f32);
+        self.multi_window_processor
             .lock()
             .set_sample_rate(sample_rate as f32);
 

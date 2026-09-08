@@ -129,6 +129,19 @@ impl MultiWindowProcessor {
         }
     }
 
+    /// Update the sample rate. `new()` is only ever given whatever default the
+    /// caller had on hand; the real hardware rate is known once the audio device
+    /// starts, and must land here or `sample_at`'s bin-to-hertz mapping — and
+    /// every internal per-band processor's own frequency labeling — silently
+    /// mislabels the whole axis. Forwarded to every internal per-band processor,
+    /// mirroring how `set_delay_samples` forwards.
+    pub fn set_sample_rate(&mut self, sample_rate: f32) {
+        self.sample_rate = sample_rate;
+        for p in &mut self.processors {
+            p.set_sample_rate(sample_rate);
+        }
+    }
+
     /// Linear interpolation of a processor's complex H at an arbitrary frequency.
     /// Interpolating H rather than dB and degrees keeps phase continuous through
     /// wrap points.
@@ -191,11 +204,24 @@ impl MultiWindowProcessor {
 }
 
 /// Group delay on a non-uniform axis. Phase must be unwrapped locally before
-/// differentiating, since the displayed phase is wrapped.
+/// differentiating, since the displayed phase is wrapped. The first and last
+/// points — the edges of the displayed chart — use a one-sided difference
+/// against their single neighbor rather than being left at a hard zero.
 fn group_delay_from_log_axis(freqs: &[f32], phase_deg: &[f32]) -> Vec<f32> {
-    let mut out = vec![0.0; freqs.len()];
-    for i in 1..freqs.len().saturating_sub(1) {
-        let mut dphi = phase_deg[i + 1] - phase_deg[i - 1];
+    let n = freqs.len();
+    let mut out = vec![0.0; n];
+    if n < 2 {
+        return out;
+    }
+    for (i, o) in out.iter_mut().enumerate() {
+        let (lo, hi) = if i == 0 {
+            (0, 1)
+        } else if i == n - 1 {
+            (n - 2, n - 1)
+        } else {
+            (i - 1, i + 1)
+        };
+        let mut dphi = phase_deg[hi] - phase_deg[lo];
         // Undo a single wrap across the interval.
         while dphi > 180.0 {
             dphi -= 360.0;
@@ -203,8 +229,8 @@ fn group_delay_from_log_axis(freqs: &[f32], phase_deg: &[f32]) -> Vec<f32> {
         while dphi < -180.0 {
             dphi += 360.0;
         }
-        let df = freqs[i + 1] - freqs[i - 1];
-        out[i] = if df > 0.0 {
+        let df = freqs[hi] - freqs[lo];
+        *o = if df > 0.0 {
             -dphi / (360.0 * df) * 1000.0
         } else {
             0.0
@@ -296,6 +322,29 @@ mod tests {
                 p.max_averages(),
                 4,
                 "averaging depth must reach every band's processor"
+            );
+        }
+    }
+
+    /// Sample rate must reach both the top-level field `sample_at` uses for
+    /// stitching and every internal per-band processor's own frequency
+    /// labeling. Without this, the axis stays mislabelled on any device that
+    /// isn't the rate the processor happened to be constructed with.
+    #[test]
+    fn set_sample_rate_reaches_every_sub_processor_and_updates_stitching() {
+        let mut mw = MultiWindowProcessor::new(48_000.0);
+        mw.set_sample_rate(96_000.0);
+
+        assert_eq!(
+            mw.sample_rate, 96_000.0,
+            "top-level field used by sample_at must update"
+        );
+
+        for p in &mw.processors {
+            let nyquist = *p.get_data().frequencies.last().unwrap();
+            assert!(
+                (nyquist - 48_000.0).abs() < 1.0,
+                "sub-processor's own frequency labeling must reflect the new rate, got Nyquist {nyquist}"
             );
         }
     }

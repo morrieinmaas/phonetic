@@ -488,6 +488,91 @@ fn multi_window_resolves_low_frequencies_a_single_fft_cannot() {
     );
 }
 
+/// `new()` only ever gets whatever default sample rate the caller had on hand;
+/// the real device rate arrives later via `set_sample_rate`, exactly as the
+/// engine does at device-start. If that call is dropped, or doesn't actually
+/// correct the axis, every bin-to-hertz mapping used to stitch the log axis
+/// stays wrong. 44.1 kHz is the realistic non-48k case (44.1/48/96/192 kHz
+/// interfaces are all common in the field).
+#[test]
+fn multi_window_tracks_a_non_48k_sample_rate_after_set_sample_rate() {
+    let fs = 44_100.0_f32;
+    let a = 0.9_f32;
+    let x = noise(65_536 * 8, 24);
+
+    let mut prev = 0.0;
+    let y: Vec<f32> = x
+        .iter()
+        .map(|s| {
+            prev = a * prev + (1.0 - a) * s;
+            prev
+        })
+        .collect();
+
+    // Mirrors engine startup: constructed at a default that is not the real
+    // device rate, then corrected before any processing happens.
+    let mut mw = phonetic_lib::dsp::MultiWindowProcessor::new(FS);
+    mw.set_sample_rate(fs);
+    mw.process(&y, &x);
+    let d = mw.get_data();
+
+    // The axis itself must still cover 20 Hz-20 kHz regardless of sample rate.
+    assert!(d.frequencies[0] >= 19.0 && d.frequencies[0] <= 21.0);
+    assert!((d.frequencies.last().unwrap() - 20_000.0).abs() < 1.0);
+
+    let mut worst = 0.0_f32;
+    for (i, &f) in d.frequencies.iter().enumerate() {
+        if !(25.0..=15_000.0).contains(&f) {
+            continue;
+        }
+        let w = 2.0 * PI * f / fs;
+        let (re, im) = (1.0 - a * w.cos(), a * w.sin());
+        let expect = 20.0 * ((1.0 - a) / (re * re + im * im).sqrt()).log10();
+        worst = worst.max((d.magnitude_db[i] - expect).abs());
+    }
+
+    // A stale 48 kHz label on this 44.1 kHz signal mislabels every bin by a
+    // factor of 48000/44100, which the one-pole filter's transition region
+    // turns into ~0.7 dB of magnitude error — well outside this tolerance.
+    assert!(
+        worst < 0.2,
+        "worst magnitude error {worst:.3} dB across 25 Hz-15 kHz at {fs} Hz sample rate"
+    );
+}
+
+/// The edges of the log axis (20 Hz and 20 kHz) are the two ends of the
+/// displayed chart. They must show the true group delay, not a hard zero from
+/// a loop that skipped the first and last points.
+#[test]
+fn multi_window_group_delay_is_correct_at_the_axis_edges() {
+    // Small enough that the phase change between adjacent log-axis points near
+    // 20 kHz stays well under 180 degrees, so the wrap-correction picks the
+    // right branch instead of aliasing.
+    let delay_samples = 40; // 0.833 ms at 48 kHz
+    let x = noise(65_536 * 8, 26);
+    let mut y = vec![0.0; x.len()];
+    y[delay_samples..].copy_from_slice(&x[..x.len() - delay_samples]);
+
+    let mut mw = phonetic_lib::dsp::MultiWindowProcessor::new(FS);
+    mw.process(&y, &x);
+    let d = mw.get_data();
+
+    let expected_ms = delay_samples as f32 * 1000.0 / FS;
+    let first = d.group_delay_ms[0];
+    let last = *d.group_delay_ms.last().unwrap();
+
+    assert!(
+        (first - expected_ms).abs() < 0.3,
+        "group delay at {:.1} Hz (first axis point) should be ~{expected_ms:.3} ms, got {first:.3} ms",
+        d.frequencies[0]
+    );
+    assert!(
+        (last - expected_ms).abs() < 0.3,
+        "group delay at {:.1} Hz (last axis point) should be ~{expected_ms:.3} ms, got {last:.3} ms",
+        d.frequencies[d.frequencies.len() - 1]
+    );
+}
+
 #[test]
 fn multi_window_output_is_on_the_log_axis() {
     let x = noise(65_536 * 2, 21);
