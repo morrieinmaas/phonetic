@@ -136,6 +136,10 @@ test: test-ts test-rust
 fixtures:
     cd apps/desktop/src-tauri && cargo test --test audio_file_roundtrip -- --nocapture
 
+# Write an example session file to /tmp for inspection
+session-example:
+    cd apps/desktop/src-tauri && cargo test --test session_roundtrip session_file_is_human_readable -- --nocapture
+
 # Run Rust tests with coverage (requires cargo-tarpaulin)
 test-rust-coverage:
     cd {{tauri}} && cargo tarpaulin --out Html --output-dir coverage

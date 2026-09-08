@@ -16,6 +16,7 @@
 	"dependencies": {
 		"@react-three/fiber": "^9.0.0",
 		"@tauri-apps/api": "^2.2.0",
+		"@tauri-apps/plugin-dialog": "^2.7.3",
 		"@tauri-apps/plugin-shell": "^2.2.0",
 		"class-variance-authority": "^0.7.0",
 		"clsx": "^2.1.0",

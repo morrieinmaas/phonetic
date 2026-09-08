@@ -3,6 +3,7 @@ pub mod cli;
 mod commands;
 pub mod dsp;
 pub mod licensing;
+pub mod session;
 
 use tauri::Manager;
 
@@ -13,6 +14,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             log::info!("Phonetic setup starting...");
             println!("Phonetic setup starting...");
@@ -85,6 +87,9 @@ pub fn run() {
             // Licensing
             commands::get_license_state,
             commands::activate_license,
+            // Session save/load commands
+            commands::save_session,
+            commands::load_session,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

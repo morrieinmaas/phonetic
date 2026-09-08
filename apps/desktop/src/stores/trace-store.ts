@@ -1,6 +1,12 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { StoredTrace, TraceSlot, TransferFunctionData } from "../types/audio";
+import type {
+	Session,
+	SessionSettings,
+	StoredTrace,
+	TraceSlot,
+	TransferFunctionData,
+} from "../types/audio";
 
 /** Predefined colors for traces */
 const TRACE_COLORS = [
@@ -53,6 +59,12 @@ interface TraceStore {
 
 	/** Get all visible traces */
 	getVisibleTraces: () => StoredTrace[];
+
+	/** Snapshot the store as a session document. */
+	toSession: (name: string, settings: SessionSettings) => Session;
+
+	/** Replace the store's contents with a loaded session. */
+	fromSession: (session: Session) => void;
 }
 
 export const useTraceStore = create<TraceStore>()(
@@ -172,6 +184,21 @@ export const useTraceStore = create<TraceStore>()(
 
 			getVisibleTraces: () => {
 				return get().traces.filter((t) => t.visible);
+			},
+
+			toSession: (name, settings) => ({
+				version: 1,
+				created_at: new Date().toISOString(),
+				name,
+				settings,
+				traces: get().traces,
+			}),
+
+			fromSession: (session) => {
+				set({
+					traces: session.traces,
+					slots: { A: null, B: null, C: null, D: null },
+				});
 			},
 		}),
 		{

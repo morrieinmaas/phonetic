@@ -501,6 +501,16 @@ pub fn activate_license(
     ))
 }
 
+#[tauri::command]
+pub fn save_session(path: String, session: crate::session::Session) -> Result<(), String> {
+    crate::session::save_session_to_path(&path, &session)
+}
+
+#[tauri::command]
+pub fn load_session(path: String) -> Result<crate::session::Session, String> {
+    crate::session::load_session_from_path(&path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -568,5 +578,36 @@ mod tests {
             found.iter().any(|d| d.code == "no_measurement_signal"),
             "an idle engine has no measurement signal"
         );
+    }
+
+    #[test]
+    fn save_and_load_session_commands_round_trip_through_a_file() {
+        use crate::session::{Session, SessionSettings, SESSION_VERSION};
+
+        let path = std::env::temp_dir()
+            .join("phonetic_command_session.json")
+            .to_string_lossy()
+            .into_owned();
+
+        let session = Session {
+            version: SESSION_VERSION,
+            created_at: "2026-09-07T12:00:00Z".into(),
+            name: "Command roundtrip".into(),
+            settings: SessionSettings {
+                sample_rate: 48_000.0,
+                fft_size: 4096,
+                multi_window: false,
+                smoothing: "none".into(),
+                delay_samples: 0,
+                max_averages: 8,
+            },
+            traces: vec![],
+        };
+
+        save_session(path.clone(), session).expect("save_session should succeed");
+        let loaded = load_session(path.clone()).expect("load_session should succeed");
+        assert_eq!(loaded.name, "Command roundtrip");
+
+        std::fs::remove_file(&path).ok();
     }
 }

@@ -7,6 +7,7 @@ import type {
 	ReferenceCurve,
 	ReferenceCurveInfo,
 	ReferenceCurveType,
+	Session,
 	SignalType,
 	SmoothingFraction,
 } from "../types/audio";
@@ -217,6 +218,18 @@ export const audioApi = {
 	 * Get the rig's current diagnoses, most severe first.
 	 */
 	getDiagnostics: (): Promise<Diagnosis[]> => invoke<Diagnosis[]>("get_diagnostics"),
+	 * Save a measurement session as pretty-printed JSON at the given path
+	 * @param path - Filesystem path to write the session to
+	 * @param session - The session document to persist
+	 */
+	saveSession: (path: string, session: Session): Promise<void> =>
+		invoke("save_session", { path, session }),
+
+	/**
+	 * Load a measurement session from disk
+	 * @param path - Filesystem path to read the session from
+	 */
+	loadSession: (path: string): Promise<Session> => invoke<Session>("load_session", { path }),
 };
 
 /**
@@ -240,6 +253,8 @@ export type {
 	ReferenceCurve,
 	ReferenceCurveInfo,
 	ReferenceCurveType,
+	Session,
+	SessionSettings,
 	SignalType,
 	StoredTrace,
 	TraceSlot,
