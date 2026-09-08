@@ -117,6 +117,24 @@ export interface Diagnosis {
 	delay_samples: number | null;
 }
 
+/** Biquad filter kinds the virtual EQ engine supports. */
+export type FilterType = "peaking" | "low_shelf" | "high_shelf" | "high_pass" | "low_pass";
+
+/** A single biquad filter, matching the Rust `BiquadFilter` wire format exactly. */
+export interface BiquadFilter {
+	filter_type: FilterType;
+	frequency_hz: number;
+	gain_db: number;
+	q: number;
+	enabled: boolean;
+}
+
+/** Trial/licence status, matching the Rust `LicenseState` wire format exactly. */
+export type LicenseState =
+	| { state: "trial"; days_remaining: number }
+	| { state: "licensed"; key_suffix: string }
+	| { state: "expired" };
+
 /** Settings captured alongside a saved session */
 export interface SessionSettings {
 	sample_rate: number;

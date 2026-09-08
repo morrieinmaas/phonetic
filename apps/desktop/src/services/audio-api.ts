@@ -3,7 +3,9 @@ import type {
 	AudioBackend,
 	AudioDeviceList,
 	AudioState,
+	BiquadFilter,
 	Diagnosis,
+	LicenseState,
 	ReferenceCurve,
 	ReferenceCurveInfo,
 	ReferenceCurveType,
@@ -255,6 +257,40 @@ export const audioApi = {
 	 * @param path - Filesystem path to read the session from
 	 */
 	loadSession: (path: string): Promise<Session> => invoke<Session>("load_session", { path }),
+
+	// ========================================================================
+	// Virtual EQ
+	// ========================================================================
+
+	/**
+	 * Predict the effect of a filter bank on a measured transfer function.
+	 * Coherence is carried through untouched by the backend.
+	 * @param trace - The measured transfer function to apply the filter bank to
+	 * @param filters - The filter bank, in series
+	 * @param sampleRate - Sample rate the filters' coefficients are computed against
+	 */
+	predictEq: (
+		trace: TransferFunctionData,
+		filters: BiquadFilter[],
+		sampleRate: number,
+	): Promise<TransferFunctionData> =>
+		invoke<TransferFunctionData>("predict_eq", { trace, filters, sampleRate }),
+
+	// ========================================================================
+	// Licensing
+	// ========================================================================
+
+	/**
+	 * Get the current trial/licence state, persisting the first-run date on first call.
+	 */
+	getLicenseState: (): Promise<LicenseState> => invoke<LicenseState>("get_license_state"),
+
+	/**
+	 * Activate a licence key with the licence server.
+	 * @param key - The licence key to activate
+	 */
+	activateLicense: (key: string): Promise<LicenseState> =>
+		invoke<LicenseState>("activate_license", { key }),
 };
 
 /**
@@ -275,6 +311,9 @@ export type {
 	AudioDevice,
 	AudioDeviceList,
 	AudioState,
+	BiquadFilter,
+	FilterType,
+	LicenseState,
 	ReferenceCurve,
 	ReferenceCurveInfo,
 	ReferenceCurveType,

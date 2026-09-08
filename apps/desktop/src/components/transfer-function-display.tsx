@@ -11,14 +11,18 @@ import {
 	nearestIndex,
 	pixelToLogFrequency,
 } from "../lib/plot-scales";
+import { audioApi } from "../services/audio-api";
+import { useEqStore } from "../stores/eq-store";
 import { useTraceStore } from "../stores/trace-store";
 import type {
+	BiquadFilter,
 	ReferenceCurve,
 	ReferenceCurveType,
 	StoredTrace,
 	TransferFunctionData,
 } from "../types/audio";
 import { CursorReadout } from "./cursor-readout";
+import { EqControls } from "./eq-controls";
 import { ReferenceCurveSelector } from "./reference-curve-selector";
 import { TraceControls } from "./trace-controls";
 
@@ -26,6 +30,8 @@ interface TransferFunctionDisplayProps {
 	data: TransferFunctionData | null;
 	isRunning: boolean;
 	onResetAveraging: () => void;
+	/** Sample rate the virtual EQ's filter coefficients are computed against. */
+	sampleRate: number;
 }
 
 /** Maximum number of stored traces that can be displayed simultaneously */
@@ -103,6 +109,7 @@ export const TransferFunctionDisplay = ({
 	data,
 	isRunning,
 	onResetAveraging,
+	sampleRate,
 }: TransferFunctionDisplayProps) => {
 	const containerRef = useRef<HTMLDivElement>(null);
 	const chartRef = useRef<uPlot | null>(null);
@@ -126,6 +133,45 @@ export const TransferFunctionDisplay = ({
 	const visibleTraces = useTraceStore(
 		useShallow((state) => state.traces.filter((t) => t.visible).slice(0, MAX_DISPLAYED_TRACES)),
 	);
+
+	// Virtual EQ: predict the effect of the enabled filter bank on the live measurement,
+	// or on the first visible stored trace when nothing is running.
+	const enabledEqFilters = useEqStore(
+		useShallow((state) => state.filters.filter((f) => f.enabled)),
+	);
+	const eqBypassed = useEqStore((state) => state.bypassed);
+	const [predictedData, setPredictedData] = useState<TransferFunctionData | null>(null);
+	const eqSourceData = data ?? visibleTraces[0]?.data ?? null;
+	const eqActive = !eqBypassed && enabledEqFilters.length > 0 && eqSourceData !== null;
+
+	useEffect(() => {
+		if (!eqActive || !eqSourceData) {
+			setPredictedData(null);
+			return;
+		}
+
+		let cancelled = false;
+		const filterBank: BiquadFilter[] = enabledEqFilters.map((f) => ({
+			filter_type: f.filter_type,
+			frequency_hz: f.frequency_hz,
+			gain_db: f.gain_db,
+			q: f.q,
+			enabled: f.enabled,
+		}));
+
+		audioApi
+			.predictEq(eqSourceData, filterBank, sampleRate)
+			.then((result) => {
+				if (!cancelled) setPredictedData(result);
+			})
+			.catch(() => {
+				if (!cancelled) setPredictedData(null);
+			});
+
+		return () => {
+			cancelled = true;
+		};
+	}, [eqActive, eqSourceData, enabledEqFilters, sampleRate]);
 
 	// Watch for theme changes
 	useEffect(() => {
@@ -177,6 +223,13 @@ export const TransferFunctionDisplay = ({
 				width: 1.5,
 				scale: "magnitude",
 				dash: [6, 3],
+			},
+			{
+				label: "Predicted (EQ)",
+				stroke: isDark ? "oklch(0.75 0.18 30)" : "oklch(0.55 0.2 30)",
+				width: 2,
+				scale: "magnitude",
+				dash: [2, 3],
 			},
 		];
 
@@ -297,6 +350,7 @@ export const TransferFunctionDisplay = ({
 			new Array(numPoints).fill(0), // Magnitude
 			new Array(numPoints).fill(0), // Phase
 			new Array(numPoints).fill(null), // Reference curve
+			new Array(numPoints).fill(null), // Predicted (EQ)
 		];
 
 		// Add empty arrays for trace slots
@@ -441,6 +495,10 @@ export const TransferFunctionDisplay = ({
 				? interpolatePhaseToLogScale(data.phase_deg, data.frequencies, logFreqs, mapToLogScale)
 				: new Array(numPoints).fill(null);
 		const refCurveValues = getRefCurveValues();
+		const predictedValues =
+			eqActive && predictedData
+				? mapToLogScale(predictedData.magnitude_db, predictedData.frequencies, logFreqs)
+				: new Array(numPoints).fill(null);
 
 		// Build chart data array
 		const chartData: uPlot.AlignedData = [
@@ -448,6 +506,7 @@ export const TransferFunctionDisplay = ({
 			logMagnitude,
 			logPhase,
 			refCurveValues,
+			predictedValues,
 		];
 
 		// Add trace data
@@ -463,6 +522,7 @@ export const TransferFunctionDisplay = ({
 				// Combine all visible magnitude data for scale calculation
 				const allMagnitudes = [
 					...(data && isRunning ? logMagnitude : []),
+					...predictedValues,
 					...visibleTraces.flatMap((t) => getTraceValues(t)),
 				].filter((v): v is number => v !== null);
 
@@ -479,7 +539,16 @@ export const TransferFunctionDisplay = ({
 		}
 
 		chartRef.current.setData(chartData);
-	}, [data, isRunning, autoZoom, getRefCurveValues, getTraceValues, visibleTraces]);
+	}, [
+		data,
+		isRunning,
+		autoZoom,
+		getRefCurveValues,
+		getTraceValues,
+		visibleTraces,
+		eqActive,
+		predictedData,
+	]);
 
 	useEffect(() => {
 		updateChart();
@@ -544,6 +613,9 @@ export const TransferFunctionDisplay = ({
 					</button>
 				</div>
 			</div>
+			<div className="mb-2 flex-shrink-0 rounded-md border border-border/50 p-2">
+				<EqControls />
+			</div>
 			{/* biome-ignore lint/a11y/useKeyWithClickEvents: pointer-only cursor placement on a continuous log-frequency plot has no meaningful keyboard equivalent */}
 			<div
 				ref={containerRef}
@@ -580,6 +652,15 @@ export const TransferFunctionDisplay = ({
 							style={{ borderTopWidth: 1 }}
 						/>
 						{refCurveData.name}
+					</span>
+				)}
+				{eqActive && predictedData && (
+					<span className="flex items-center gap-1">
+						<span
+							className="w-4 h-0.5 bg-[oklch(0.55_0.2_30)] border-dashed"
+							style={{ borderTopWidth: 1 }}
+						/>
+						Predicted (EQ)
 					</span>
 				)}
 				{visibleTraces.map((trace) => (
