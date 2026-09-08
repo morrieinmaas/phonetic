@@ -22,9 +22,9 @@ use super::coreaudio_backend::{
 const FFT_SIZE: usize = 2048;
 const DEFAULT_SAMPLE_RATE: f32 = 48000.0;
 
-/// Real system tuning uses several mics at once. Eight covers the practical
-/// ceiling of interfaces used for live sound measurement.
-pub const MAX_INPUT_CHANNELS: usize = 8;
+/// Real system tuning uses several mics at once. Thirty-two covers the
+/// practical ceiling of interfaces used for live sound measurement.
+pub const MAX_INPUT_CHANNELS: usize = 32;
 
 /// Audio backend selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -1182,5 +1182,36 @@ mod tests {
         assert_eq!(engine.measurement_channel(), 3);
         engine.set_measurement_channel(99);
         assert_eq!(engine.measurement_channel(), MAX_INPUT_CHANNELS - 1);
+    }
+
+    #[test]
+    fn the_engine_supports_thirty_two_input_channels() {
+        assert_eq!(MAX_INPUT_CHANNELS, 32);
+    }
+
+    /// Channel selection must clamp to the new ceiling, not the old one.
+    #[test]
+    fn channel_selection_clamps_to_thirty_two() {
+        let engine = AudioEngine::new();
+        engine.set_measurement_channel(31);
+        assert_eq!(engine.measurement_channel(), 31);
+        engine.set_measurement_channel(32);
+        assert_eq!(engine.measurement_channel(), MAX_INPUT_CHANNELS - 1);
+        engine.set_measurement_channel(999);
+        assert_eq!(engine.measurement_channel(), MAX_INPUT_CHANNELS - 1);
+    }
+
+    /// Constructing the engine with 32 channels must not take a visibly long
+    /// time — this is the cheapest early warning that per-channel allocation
+    /// has become the wrong shape.
+    #[test]
+    fn constructing_a_thirty_two_channel_engine_is_fast() {
+        let start = std::time::Instant::now();
+        let _engine = AudioEngine::new();
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed.as_millis() < 500,
+            "AudioEngine::new() took {elapsed:?} with {MAX_INPUT_CHANNELS} channels"
+        );
     }
 }

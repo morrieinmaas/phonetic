@@ -597,6 +597,7 @@ pub async fn load_session(path: String) -> Result<crate::session::Session, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio::MAX_INPUT_CHANNELS;
 
     #[test]
     fn test_frequency_validation() {
@@ -706,7 +707,11 @@ mod tests {
             "must keep at least one channel"
         );
         engine.set_input_channel_count(99);
-        assert_eq!(engine.input_channel_count(), 8, "eight is the ceiling");
+        assert_eq!(
+            engine.input_channel_count(),
+            MAX_INPUT_CHANNELS,
+            "thirty-two is the ceiling"
+        );
         engine.set_input_channel_count(4);
         assert_eq!(engine.input_channel_count(), 4);
     }
