@@ -256,7 +256,11 @@ export const SpectrogramDisplay = ({
 					</button>
 				</div>
 			</div>
-			<div ref={containerRef} data-testid="spectrogram" className="flex-1 min-h-[200px] relative">
+			<div
+				ref={containerRef}
+				data-testid="spectrogram"
+				className="relative min-h-0 flex-1 overflow-hidden"
+			>
 				<canvas
 					ref={canvasRef}
 					data-testid="spectrogram-canvas"

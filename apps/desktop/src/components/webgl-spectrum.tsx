@@ -503,7 +503,7 @@ export const WebGLSpectrum = ({
 			</div>
 			<div
 				ref={plotContainerRef}
-				className={`flex-1 min-h-[280px] relative rounded-lg overflow-hidden ${themeColors.containerBg}`}
+				className={`relative min-h-0 flex-1 overflow-hidden rounded-lg ${themeColors.containerBg}`}
 				onDoubleClick={handleResetZoom}
 			>
 				<canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
