@@ -46,7 +46,9 @@ pub fn evaluate(record: &LicenseRecord, today: i64) -> LicenseState {
         return LicenseState::Expired;
     }
 
-    LicenseState::Trial { days_remaining: TRIAL_DAYS - elapsed }
+    LicenseState::Trial {
+        days_remaining: TRIAL_DAYS - elapsed,
+    }
 }
 
 /// Days since the Unix epoch, from the system clock.
@@ -56,4 +58,53 @@ pub fn today() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| (d.as_secs() / 86_400) as i64)
         .unwrap_or(0)
+}
+
+use std::path::Path;
+
+const RECORD_FILE: &str = "license.json";
+const ACTIVATE_URL: &str = "https://api.lemonsqueezy.com/v1/licenses/activate";
+
+/// Read the stored record, or start a fresh trial. Never fails: a missing or
+/// corrupt file must not lock a paying customer out of their own software.
+pub fn load_record(dir: &Path) -> LicenseRecord {
+    let fresh = || LicenseRecord {
+        key: None,
+        first_run_day: today(),
+        activated: false,
+    };
+
+    let Ok(text) = std::fs::read_to_string(dir.join(RECORD_FILE)) else {
+        return fresh();
+    };
+
+    serde_json::from_str(&text).unwrap_or_else(|_| fresh())
+}
+
+pub fn save_record(dir: &Path, record: &LicenseRecord) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+    let text =
+        serde_json::to_string_pretty(record).map_err(|e| format!("serialise licence: {e}"))?;
+    std::fs::write(dir.join(RECORD_FILE), text).map_err(|e| format!("write licence record: {e}"))
+}
+
+/// Activate a licence key with Lemon Squeezy. Returns whether it was accepted.
+pub fn activate(key: &str) -> Result<bool, String> {
+    let response = ureq::post(ACTIVATE_URL)
+        .set("Accept", "application/json")
+        .send_form(&[("license_key", key), ("instance_name", "phonetic-desktop")]);
+
+    match response {
+        Ok(res) => {
+            let body: serde_json::Value = res
+                .into_json()
+                .map_err(|e| format!("read activation response: {e}"))?;
+            Ok(body["activated"].as_bool().unwrap_or(false))
+        }
+        // A 400 means the key was rejected, which is an answer, not a failure.
+        Err(ureq::Error::Status(400, _)) => Ok(false),
+        Err(e) => Err(format!(
+            "could not reach the licence server: {e}. Check your internet connection."
+        )),
+    }
 }
