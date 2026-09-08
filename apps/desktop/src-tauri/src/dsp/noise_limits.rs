@@ -19,15 +19,24 @@
 //! and a preset nobody asked for is exactly the kind of unrequested
 //! addition this project avoids.
 //!
-//! `lapeak_limit_db` is left `None` on both built-ins even though the
-//! directive also fixes peak values (112 Pa / 140 Pa, i.e. 135 / 137 dB(C)
-//! via 20*log10(p/2e-5 Pa) -- confirmed C-weighted by the same two sources).
-//! `LeqMetrics::lapeak_db` in this codebase is the A-weighted peak
-//! (`LeqMeter`'s `a_filter` feeds it, see `dsp::leq`), not C-weighted. A/C
-//! weighting diverge most at the low frequencies impulsive peaks often
-//! carry, so comparing this app's LAFpeak against the directive's LCpeak
-//! would silently under-report peak exceedance -- worse than shipping no
-//! peak limit at all.
+//! `lcpeak_limit_db` is populated on both built-ins with the directive's
+//! C-weighted peak ceilings (112 Pa / 140 Pa, i.e. 135.0 / 136.9 dB(C) via
+//! 20*log10(p / 20 uPa re 20 uPa) -- confirmed C-weighted by the same two
+//! sources, see Article 2's definition of `ppeak`). `LeqMetrics` carries a
+//! separate `lcpeak_db` fed by `LeqMeter`'s own C-weighted filter instance
+//! (see `dsp::leq`) specifically so this comparison is metric-for-metric
+//! correct -- comparing the directive's LCpeak against this app's
+//! (A-weighted) `lapeak_db` would silently under-report peak exceedance at
+//! low frequencies, where A and C weighting diverge most and impulsive
+//! peaks often carry their energy.
+//!
+//! CAVEAT: `lcpeak_db`/`laeq_db` etc. are dBFS (full scale = 1.0, see
+//! `dsp::leq`'s module doc), not calibrated SPL -- `LeqMeter` never touches
+//! `dsp::calibration::SplCalculator`, which is wired to separate spectrum
+//! commands only. The directive's ceilings are `re 20 uPa` absolute SPL. So
+//! this comparison (like the pre-existing `laeq_limit_db` one) is only
+//! meaningful once the input to `LeqMeter::push` is calibrated SPL, not raw
+//! samples -- a wiring task, not one this module can fix on its own.
 //!
 //! The single source of truth for the built-in data is
 //! `resources/noise_limits.json`, embedded at compile time so `builtin()`
@@ -53,7 +62,7 @@ pub struct NoiseLimit {
     pub as_of: String,
     pub laeq_limit_db: f32,
     pub reference_hours: f64,
-    pub lapeak_limit_db: Option<f32>,
+    pub lcpeak_limit_db: Option<f32>,
 }
 
 /// A collection of presets, loadable from and savable to a plain JSON array
@@ -115,9 +124,9 @@ pub struct DoseResult {
     /// reference period, i.e. the dose rate projected forward rather than
     /// scaled by elapsed time so far.
     pub projected_percent_at_reference: f64,
-    /// Whether the measured A-weighted peak exceeded the limit's peak
+    /// Whether the measured C-weighted peak exceeded the limit's peak
     /// ceiling. Always `false` when the limit has no peak ceiling
-    /// (`lapeak_limit_db` is `None`) -- absence of a limit is not evidence
+    /// (`lcpeak_limit_db` is `None`) -- absence of a limit is not evidence
     /// of compliance, just absence of a claim.
     pub peak_exceeded: bool,
 }
@@ -145,8 +154,8 @@ pub fn dose(metrics: &LeqMetrics, limit: &NoiseLimit) -> DoseResult {
     };
 
     let peak_exceeded = limit
-        .lapeak_limit_db
-        .is_some_and(|ceiling| metrics.lapeak_db > ceiling);
+        .lcpeak_limit_db
+        .is_some_and(|ceiling| metrics.lcpeak_db > ceiling);
 
     DoseResult {
         percent,
@@ -166,7 +175,22 @@ mod tests {
             lceq_db: laeq,
             lafmax_db: laeq,
             lapeak_db: laeq,
+            lcpeak_db: laeq,
             elapsed_seconds,
+        }
+    }
+
+    /// Builds metrics with an independent LCpeak, for peak-limit tests where
+    /// the LAeq dose fields are irrelevant.
+    fn metrics_with_lcpeak(lcpeak_db: f32) -> LeqMetrics {
+        LeqMetrics {
+            leq_db: 0.0,
+            laeq_db: 0.0,
+            lceq_db: 0.0,
+            lafmax_db: 0.0,
+            lapeak_db: 0.0,
+            lcpeak_db,
+            elapsed_seconds: 0.0,
         }
     }
 
@@ -201,7 +225,7 @@ mod tests {
             as_of: "2026-01-01".into(),
             laeq_limit_db: 85.0,
             reference_hours: 8.0,
-            lapeak_limit_db: None,
+            lcpeak_limit_db: None,
         };
         let metrics = metrics_with(85.0, 8.0 * 3600.0);
         let d = dose(&metrics, &limit);
@@ -219,7 +243,7 @@ mod tests {
             as_of: "2026-01-01".into(),
             laeq_limit_db: 85.0,
             reference_hours: 8.0,
-            lapeak_limit_db: None,
+            lcpeak_limit_db: None,
         };
         let at = dose(&metrics_with(85.0, 3600.0), &limit).percent;
         let over = dose(&metrics_with(88.0, 3600.0), &limit).percent;
@@ -275,5 +299,32 @@ mod tests {
         let loaded = LimitSet::load(&path).unwrap();
         assert!(loaded.limits.is_empty());
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// A limit with a peak ceiling is exceeded by a loud enough LCpeak and
+    /// not by a quiet one -- the comparison `lcpeak_limit_db` exists to make.
+    #[test]
+    fn a_peak_limit_is_exceeded_by_a_loud_peak_and_not_a_quiet_one() {
+        let limit = NoiseLimit {
+            id: "test".into(),
+            name: "Test".into(),
+            source: "test".into(),
+            as_of: "2026-01-01".into(),
+            laeq_limit_db: 85.0,
+            reference_hours: 8.0,
+            lcpeak_limit_db: Some(135.0),
+        };
+
+        let loud = dose(&metrics_with_lcpeak(140.0), &limit);
+        assert!(
+            loud.peak_exceeded,
+            "140 dB LCpeak should exceed a 135 dB ceiling"
+        );
+
+        let quiet = dose(&metrics_with_lcpeak(100.0), &limit);
+        assert!(
+            !quiet.peak_exceeded,
+            "100 dB LCpeak should not exceed a 135 dB ceiling"
+        );
     }
 }

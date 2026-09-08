@@ -114,6 +114,7 @@ mod tests {
             lceq_db: laeq,
             lafmax_db: laeq,
             lapeak_db: laeq,
+            lcpeak_db: laeq,
             elapsed_seconds: 1.0,
         }
     }

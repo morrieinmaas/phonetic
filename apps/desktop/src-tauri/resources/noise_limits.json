@@ -2,19 +2,19 @@
   {
     "id": "eu-2003-10-ec-lower-action",
     "name": "EU Lower Exposure Action Value (LEX,8h)",
-    "source": "Directive 2003/10/EC of the European Parliament and of the Council of 6 February 2003 on the minimum health and safety requirements regarding the exposure of workers to the risks arising from physical agents (noise), Article 3(1)(c): lower exposure action values LEX,8h = 80 dB(A). Official Journal L 42, 15.2.2003, p. 38-44.",
+    "source": "Directive 2003/10/EC of the European Parliament and of the Council of 6 February 2003 on the minimum health and safety requirements regarding the exposure of workers to the risks arising from physical agents (noise), Article 3(1)(c): lower exposure action values LEX,8h = 80 dB(A) and ppeak = 112 Pa (135.0 dB(C) re 20 uPa, via 20*log10(112 / 20e-6)); Article 2 defines ppeak as the maximum 'C'-frequency weighted instantaneous noise pressure. Official Journal L 42, 15.2.2003, p. 38-44.",
     "as_of": "2003-02-06",
     "laeq_limit_db": 80.0,
     "reference_hours": 8.0,
-    "lapeak_limit_db": null
+    "lcpeak_limit_db": 135.0
   },
   {
     "id": "eu-2003-10-ec-upper-action",
     "name": "EU Upper Exposure Action Value (LEX,8h)",
-    "source": "Directive 2003/10/EC of the European Parliament and of the Council of 6 February 2003 on the minimum health and safety requirements regarding the exposure of workers to the risks arising from physical agents (noise), Article 3(1)(b): upper exposure action values LEX,8h = 85 dB(A). Official Journal L 42, 15.2.2003, p. 38-44.",
+    "source": "Directive 2003/10/EC of the European Parliament and of the Council of 6 February 2003 on the minimum health and safety requirements regarding the exposure of workers to the risks arising from physical agents (noise), Article 3(1)(b): upper exposure action values LEX,8h = 85 dB(A) and ppeak = 140 Pa (136.9 dB(C) re 20 uPa, via 20*log10(140 / 20e-6)); Article 2 defines ppeak as the maximum 'C'-frequency weighted instantaneous noise pressure. Official Journal L 42, 15.2.2003, p. 38-44.",
     "as_of": "2003-02-06",
     "laeq_limit_db": 85.0,
     "reference_hours": 8.0,
-    "lapeak_limit_db": null
+    "lcpeak_limit_db": 136.9
   }
 ]

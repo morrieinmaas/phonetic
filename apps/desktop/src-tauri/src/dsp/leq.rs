@@ -310,29 +310,40 @@ pub struct LeqMetrics {
     pub lceq_db: f32,
     pub lafmax_db: f32,
     pub lapeak_db: f32,
+    pub lcpeak_db: f32,
     pub elapsed_seconds: f64,
 }
 
 /// Combined LEQ, time-weighted max and peak meter. Runs three `LeqIntegrator`s
 /// side by side (Z, A, C -- reusing the same weighting cascade as above) plus
-/// a fourth, independent A-weighting filter that feeds two detectors:
+/// two further independent weighting filters that feed the peak/max
+/// detectors:
 ///
 /// - `lafmax_db`: the A-weighted signal's squared level passed through a
 ///   Fast (125 ms) exponential detector, then maxed over time. This is a
 ///   *time-weighted* measurement.
 /// - `lapeak_db`: the largest instantaneous `|A-weighted sample|` seen, with
 ///   no time weighting at all.
+/// - `lcpeak_db`: the same untime-weighted peak tracking, but off a separate
+///   C-weighted filter instance. Occupational noise regulations (e.g. EU
+///   2003/10/EC) specify peak ceilings as C-weighted -- see `dsp::noise_limits`
+///   -- while this project's spec names LApeak, so both are tracked.
 ///
 /// Peak and max are different measurements -- conflating them is the
-/// classic error this type exists to avoid.
+/// classic error this type exists to avoid. Each peak metric gets its own
+/// filter instance (rather than sharing `laeq`/`lceq`'s integrator filters)
+/// for clear ownership: an LEQ integrator's filter state exists to feed a
+/// running sum of squares, not to be read mid-stream for a peak.
 pub struct LeqMeter {
     leq: LeqIntegrator,
     laeq: LeqIntegrator,
     lceq: LeqIntegrator,
     a_filter: WeightingFilter,
+    c_filter: WeightingFilter,
     fast_detector: ExponentialLevelDetector,
     fast_max_mean_square: f32,
     peak_abs: f32,
+    peak_abs_c: f32,
     sample_rate: f32,
     sample_count: u64,
 }
@@ -344,9 +355,11 @@ impl LeqMeter {
             laeq: LeqIntegrator::new(sample_rate, FrequencyWeighting::A),
             lceq: LeqIntegrator::new(sample_rate, FrequencyWeighting::C),
             a_filter: WeightingFilter::new(FrequencyWeighting::A, sample_rate),
+            c_filter: WeightingFilter::new(FrequencyWeighting::C, sample_rate),
             fast_detector: ExponentialLevelDetector::new(FAST_TIME_CONSTANT_SECONDS, sample_rate),
             fast_max_mean_square: 0.0,
             peak_abs: 0.0,
+            peak_abs_c: 0.0,
             sample_rate,
             sample_count: 0,
         }
@@ -366,6 +379,9 @@ impl LeqMeter {
 
             let mean_square = self.fast_detector.push(weighted);
             self.fast_max_mean_square = self.fast_max_mean_square.max(mean_square);
+
+            let weighted_c = self.c_filter.process(x);
+            self.peak_abs_c = self.peak_abs_c.max(weighted_c.abs());
         }
 
         self.sample_count += samples.len() as u64;
@@ -378,6 +394,7 @@ impl LeqMeter {
             lceq_db: self.lceq.leq_db(),
             lafmax_db: mean_square_to_db(self.fast_max_mean_square),
             lapeak_db: amplitude_to_db(self.peak_abs),
+            lcpeak_db: amplitude_to_db(self.peak_abs_c),
             elapsed_seconds: self.sample_count as f64 / self.sample_rate as f64,
         }
     }
@@ -387,9 +404,11 @@ impl LeqMeter {
         self.laeq.reset();
         self.lceq.reset();
         self.a_filter.reset_state();
+        self.c_filter.reset_state();
         self.fast_detector.reset();
         self.fast_max_mean_square = 0.0;
         self.peak_abs = 0.0;
+        self.peak_abs_c = 0.0;
         self.sample_count = 0;
     }
 }
@@ -703,6 +722,48 @@ mod tests {
         assert!(
             after < before - 20.0,
             "peak survived reset: {before:.2} -> {after:.2}"
+        );
+    }
+
+    /// A C-weighted peak is higher than an A-weighted peak for a
+    /// low-frequency transient: C is nearly flat at 63 Hz (per
+    /// `IEC_C_WEIGHTING_DB`'s neighbouring points) where A cuts hard
+    /// (-26.2 dB per `IEC_A_WEIGHTING_DB`). This is the test proving
+    /// `lcpeak_db` is a genuinely different metric from `lapeak_db`, not an
+    /// accidental alias of it.
+    #[test]
+    fn c_weighted_peak_exceeds_a_weighted_peak_for_a_low_frequency_transient() {
+        let mut meter = LeqMeter::new(FS);
+        // A short burst -- long enough for both filters to settle into
+        // steady state, brief enough to read as a transient event rather
+        // than a sustained tone.
+        meter.push(&sine(63.0, 1.0, 0.2));
+
+        let m = meter.metrics();
+        assert!(
+            m.lcpeak_db > m.lapeak_db + 10.0,
+            "at 63 Hz LCpeak {:.2} should exceed LApeak {:.2} by well over 10 dB",
+            m.lcpeak_db,
+            m.lapeak_db
+        );
+    }
+
+    /// Reset clears the C-weighted peak too, mirroring `reset_clears_the_peak`.
+    #[test]
+    fn reset_clears_the_c_weighted_peak() {
+        let mut meter = LeqMeter::new(FS);
+        let mut loud = vec![0.0f32; 1000];
+        loud[0] = 1.0;
+        meter.push(&loud);
+        let before = meter.metrics().lcpeak_db;
+
+        meter.reset();
+        meter.push(&sine(1000.0, 0.01, 0.5));
+        let after = meter.metrics().lcpeak_db;
+
+        assert!(
+            after < before - 20.0,
+            "C-weighted peak survived reset: {before:.2} -> {after:.2}"
         );
     }
 }
