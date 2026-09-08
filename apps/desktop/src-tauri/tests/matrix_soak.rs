@@ -112,17 +112,33 @@ fn routing_swaps_do_not_stall_processing() {
     // contention the test exists to bound.
     std::thread::sleep(std::time::Duration::from_millis(10));
 
+    // A wall-clock MAXIMUM cannot prove "the reader is never blocked by the
+    // writer": the OS can deschedule this thread mid-read whatever the locking
+    // does, so the max measures scheduler noise. Count slow reads instead. If a
+    // lock were genuinely held across expensive work, essentially every read
+    // would be slow, not one in ten thousand.
+    const READS: usize = 200_000;
+    const SLOW_READ_MICROS: u128 = 100;
+
     let mut worst = std::time::Duration::ZERO;
-    for _ in 0..200_000 {
+    let mut slow_reads = 0usize;
+    for _ in 0..READS {
         let start = std::time::Instant::now();
         let _routing = engine.routing();
-        worst = worst.max(start.elapsed());
+        let elapsed = start.elapsed();
+        worst = worst.max(elapsed);
+        if elapsed.as_micros() >= SLOW_READ_MICROS {
+            slow_reads += 1;
+        }
     }
 
     stop.store(true, Ordering::Relaxed);
     let (swaps, successes) = writer.join().unwrap();
 
-    println!("{swaps} routing swaps while reading; worst-case read was {worst:?}");
+    println!(
+        "{swaps} routing swaps while reading; {slow_reads}/{READS} reads over \
+         {SLOW_READ_MICROS}us, worst {worst:?}"
+    );
 
     assert!(swaps > 0, "the writer never ran");
     assert_eq!(
@@ -130,8 +146,12 @@ fn routing_swaps_do_not_stall_processing() {
         "some routing swaps were rejected by validation, so the swap loop was not \
          actually exercising the write path"
     );
+    // Under 0.1% of reads may be slow — generous enough to absorb scheduler
+    // preemption on a loaded CI runner, tight enough that a lock held across
+    // work (which would make ~100% of reads slow) fails loudly.
     assert!(
-        worst.as_micros() < 1000,
-        "worst-case routing read was {worst:?} while routing was being swapped"
+        slow_reads * 1000 < READS,
+        "{slow_reads} of {READS} routing reads took over {SLOW_READ_MICROS}us \
+         (worst {worst:?}) — the reader is being blocked by the writer"
     );
 }
