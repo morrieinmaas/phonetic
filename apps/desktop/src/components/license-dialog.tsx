@@ -95,7 +95,7 @@ export const LicenseDialog = ({ state, onStateChange }: LicenseDialogProps) => {
 	return (
 		<div
 			data-testid="trial-banner"
-			className="flex items-center gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-400"
+			className="flex items-center gap-3 rounded-lg border border-amber-500/60 bg-card px-4 py-2.5 text-sm text-amber-400 shadow-lg"
 		>
 			<span className="flex-1">{message}</span>
 			<button type="button" onClick={() => setDismissed(true)}>

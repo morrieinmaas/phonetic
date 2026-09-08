@@ -53,8 +53,8 @@ export const DiagnosticsBanner = () => {
 			data-severity={top.severity}
 			className={
 				top.severity === "error"
-					? "flex items-center gap-3 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-2 text-sm text-red-400"
-					: "flex items-center gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-400"
+					? "flex items-start gap-3 rounded-lg border border-red-500/60 bg-card px-4 py-2.5 text-sm text-red-400 shadow-lg"
+					: "flex items-start gap-3 rounded-lg border border-amber-500/60 bg-card px-4 py-2.5 text-sm text-amber-400 shadow-lg"
 			}
 		>
 			<span className="flex-1">{top.message}</span>
