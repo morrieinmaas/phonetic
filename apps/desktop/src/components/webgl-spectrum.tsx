@@ -82,6 +82,33 @@ const freqToX = (freq: number, width: number, minFreq = 20, maxFreq = 20000): nu
 };
 
 // Map dB value to pixel Y position
+/** Frequencies the grid marks. Decades and the half-decades between them, which
+    is how a system technician reads an audio plot. Only the majors get a label,
+    so the axis stays legible at any width. */
+const GRID_FREQUENCIES: { hz: number; label?: string }[] = [
+	{ hz: 20, label: "20" },
+	{ hz: 50 },
+	{ hz: 100, label: "100" },
+	{ hz: 200 },
+	{ hz: 500 },
+	{ hz: 1000, label: "1k" },
+	{ hz: 2000 },
+	{ hz: 5000, label: "5k" },
+	{ hz: 10000, label: "10k" },
+	{ hz: 20000, label: "20k" },
+];
+
+/** Amplitude gridlines, matching the renderer's -120..0 dB range. */
+const GRID_DECIBELS = [0, -20, -40, -60, -80, -100, -120];
+
+/** Horizontal position of a frequency, as a percentage of plot width. */
+const freqToPercent = (hz: number, minFreq = 20, maxFreq = 20000): number =>
+	((Math.log10(hz) - Math.log10(minFreq)) / (Math.log10(maxFreq) - Math.log10(minFreq))) * 100;
+
+/** Vertical position of a level, as a percentage of plot height. */
+const dbToPercent = (db: number, minDb = -120, maxDb = 0): number =>
+	((maxDb - db) / (maxDb - minDb)) * 100;
+
 const dbToY = (db: number, height: number, minDb = -120, maxDb = 0): number => {
 	const normalized = (db - minDb) / (maxDb - minDb);
 	return height * (1 - Math.max(0, Math.min(1, normalized)));
@@ -511,60 +538,75 @@ export const WebGLSpectrum = ({
 					ref={peakCanvasRef}
 					className="absolute inset-0 w-full h-full pointer-events-none"
 				/>
-				{/* Grid overlay using SVG */}
+				{/* Grid and labels. Positions are computed from the same log-frequency
+				    and dB mappings the renderer uses, so a line always lands on the
+				    value it claims. The previous overlay hardcoded percentages —
+				    1 kHz sat at 40% when a 20 Hz-20 kHz log axis puts it at 57% —
+				    and declared a <pattern> it never referenced, so no grid drew. */}
 				<svg
-					className="absolute inset-0 w-full h-full pointer-events-none"
+					className="pointer-events-none absolute inset-0 h-full w-full"
 					preserveAspectRatio="none"
 					aria-labelledby="spectrum-grid-title"
 				>
 					<title id="spectrum-grid-title">Spectrum analyzer frequency and amplitude grid</title>
-					<defs>
-						<pattern id="grid" width="100" height="50" patternUnits="userSpaceOnUse">
+
+					{GRID_FREQUENCIES.map(({ hz }) => {
+						const x = `${freqToPercent(hz)}%`;
+						return (
 							<line
-								x1="0"
-								y1="50"
-								x2="100"
-								y2="50"
+								key={`f-${hz}`}
+								x1={x}
+								y1="0"
+								x2={x}
+								y2="100%"
 								stroke={themeColors.gridStroke}
-								strokeWidth="0.5"
+								strokeWidth="1"
 							/>
-						</pattern>
-					</defs>
-					{/* Frequency labels */}
-					<text x="5%" y="96%" fill={themeColors.labelFill} fontSize="12" fontWeight="bold">
-						20
-					</text>
-					<text x="20%" y="96%" fill={themeColors.labelFill} fontSize="12" fontWeight="bold">
-						100
-					</text>
-					<text x="40%" y="96%" fill={themeColors.labelFill} fontSize="12" fontWeight="bold">
-						1k
-					</text>
-					<text x="60%" y="96%" fill={themeColors.labelFill} fontSize="12" fontWeight="bold">
-						5k
-					</text>
-					<text x="80%" y="96%" fill={themeColors.labelFill} fontSize="12" fontWeight="bold">
-						10k
-					</text>
-					<text x="95%" y="96%" fill={themeColors.labelFill} fontSize="12" fontWeight="bold">
-						20k
-					</text>
-					{/* dB labels */}
-					<text x="2%" y="8%" fill={themeColors.labelFill} fontSize="12" fontWeight="bold">
-						0dB
-					</text>
-					<text x="2%" y="30%" fill={themeColors.labelFill} fontSize="12" fontWeight="bold">
-						-30
-					</text>
-					<text x="2%" y="55%" fill={themeColors.labelFill} fontSize="12" fontWeight="bold">
-						-60
-					</text>
-					<text x="2%" y="80%" fill={themeColors.labelFill} fontSize="12" fontWeight="bold">
-						-90
-					</text>
-					<text x="2%" y="95%" fill={themeColors.labelFill} fontSize="12" fontWeight="bold">
-						-120
-					</text>
+						);
+					})}
+
+					{GRID_DECIBELS.map((db) => {
+						const y = `${dbToPercent(db)}%`;
+						return (
+							<line
+								key={`d-${db}`}
+								x1="0"
+								y1={y}
+								x2="100%"
+								y2={y}
+								stroke={themeColors.gridStroke}
+								strokeWidth="1"
+							/>
+						);
+					})}
+
+					{GRID_FREQUENCIES.filter((f) => f.label).map(({ hz, label }) => (
+						<text
+							key={`fl-${hz}`}
+							x={`${freqToPercent(hz)}%`}
+							y="98%"
+							textAnchor="middle"
+							fill={themeColors.labelFill}
+							fontSize="12"
+							fontWeight="bold"
+						>
+							{label}
+						</text>
+					))}
+
+					{GRID_DECIBELS.map((db) => (
+						<text
+							key={`dl-${db}`}
+							x="6"
+							y={`${dbToPercent(db)}%`}
+							dy={db === 0 ? "1em" : "-0.35em"}
+							fill={themeColors.labelFill}
+							fontSize="12"
+							fontWeight="bold"
+						>
+							{db === 0 ? "0dB" : String(db)}
+						</text>
+					))}
 				</svg>
 				{!isRunning && (
 					<div className="absolute inset-0 flex items-center justify-center text-muted-foreground bg-background/50 z-10">
