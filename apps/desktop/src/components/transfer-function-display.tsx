@@ -259,7 +259,7 @@ export const TransferFunctionDisplay = ({
 			scales: {
 				x: {
 					time: false,
-					distr: 2,
+					distr: 3,
 					log: 10,
 					min: xRangeRef.current[0],
 					max: xRangeRef.current[1],
@@ -305,6 +305,7 @@ export const TransferFunctionDisplay = ({
 					size: 72,
 					gap: 8,
 					scale: "magnitude",
+					splits: [-40, -30, -20, -10, 0, 10, 20],
 				},
 				{
 					side: 1,

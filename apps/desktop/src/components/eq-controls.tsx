@@ -16,8 +16,9 @@ export const EqControls = () => {
 
 	return (
 		<div data-testid="eq-controls" className="flex flex-col gap-2 text-xs">
-			{/* The section heading lives on the enclosing disclosure, so this row is
-			    just the actions. */}
+			{/* Actions sit inline with the disclosure heading, not on a row of their
+			    own — a full-width strip holding two right-aligned buttons reads as
+			    a mistake. */}
 			<div className="flex items-center justify-end">
 				<div className="flex items-center gap-2">
 					<button

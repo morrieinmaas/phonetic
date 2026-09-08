@@ -224,11 +224,18 @@ export const App = () => {
 
 			{/* Rig diagnoses sit above the measurement area: they appear and vanish
 			    on a poll, and below the status bar they shoved the footer around. */}
-			<div className="flex flex-shrink-0 flex-col gap-2 px-4 pt-4 empty:hidden">
-				{licenseState && !shouldBlockUsage(licenseState) && (
-					<LicenseDialog state={licenseState} onStateChange={setLicenseState} />
-				)}
-				<DiagnosticsBanner />
+			{/* Notifications float over the interface rather than displacing it.
+			    aria-live announces them without stealing focus. */}
+			<div
+				aria-live="polite"
+				className="pointer-events-none fixed right-4 top-16 z-40 flex w-full max-w-sm flex-col gap-2"
+			>
+				<div className="pointer-events-auto contents">
+					{licenseState && !shouldBlockUsage(licenseState) && (
+						<LicenseDialog state={licenseState} onStateChange={setLicenseState} />
+					)}
+					<DiagnosticsBanner />
+				</div>
 			</div>
 
 			{/* Main content */}

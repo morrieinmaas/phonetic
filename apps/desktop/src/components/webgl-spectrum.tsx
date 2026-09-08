@@ -15,7 +15,7 @@ const THEME_COLORS = {
 		background: [0.05, 0.05, 0.08] as const,
 		labelFill: "#e5e5e5",
 		gridStroke: "rgba(255,255,255,0.1)",
-		containerBg: "bg-[#15151d]",
+		containerBg: "bg-[#191922]",
 		peakHold: "#f59e0b",
 	},
 	light: {
