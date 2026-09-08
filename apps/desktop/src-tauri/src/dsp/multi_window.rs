@@ -45,111 +45,6 @@ pub fn band_for_frequency(freq_hz: f32) -> usize {
         .unwrap_or(512)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn log_axis_spans_the_range_with_even_octave_spacing() {
-        let axis = log_frequency_axis(20.0, 20_000.0, 48);
-
-        assert!((axis[0] - 20.0).abs() < 0.01, "should start at f_min");
-        assert!(
-            (axis[axis.len() - 1] - 20_000.0).abs() < 1.0,
-            "should end at f_max, got {}",
-            axis[axis.len() - 1]
-        );
-
-        // Just under 10 octaves from 20 Hz to 20 kHz, 48 points each.
-        assert!(
-            axis.len() > 470 && axis.len() < 490,
-            "got {} points",
-            axis.len()
-        );
-
-        // Every step is the same ratio.
-        let ratio = axis[1] / axis[0];
-        for w in axis.windows(2) {
-            assert!(
-                (w[1] / w[0] - ratio).abs() < 1e-4,
-                "spacing should be geometric: {} -> {}",
-                w[0],
-                w[1]
-            );
-        }
-    }
-
-    #[test]
-    fn low_frequencies_get_the_longest_fft() {
-        assert_eq!(
-            band_for_frequency(30.0),
-            16384,
-            "30 Hz needs the longest window"
-        );
-        assert_eq!(band_for_frequency(60.0), 16384);
-        assert_eq!(
-            band_for_frequency(10_000.0),
-            512,
-            "10 kHz needs the shortest"
-        );
-    }
-
-    #[test]
-    fn band_assignment_is_monotonic() {
-        let mut previous = usize::MAX;
-        let mut f = 20.0_f32;
-        while f < 20_000.0 {
-            let size = band_for_frequency(f);
-            assert!(
-                size <= previous,
-                "FFT size must not grow with frequency at {f} Hz"
-            );
-            previous = size;
-            f *= 1.05;
-        }
-    }
-
-    /// Delay compensation and averaging depth must reach every internal
-    /// per-band processor, not just the first one. Without this, switching to
-    /// multi-window mode silently drops the operator's delay compensation.
-    #[test]
-    fn set_delay_samples_and_max_averages_reach_every_sub_processor() {
-        let mut mw = MultiWindowProcessor::new(48_000.0);
-        mw.set_delay_samples(480);
-        mw.set_max_averages(4);
-
-        for p in &mw.processors {
-            assert_eq!(
-                p.delay_samples(),
-                480,
-                "delay must reach every band's processor"
-            );
-            assert_eq!(
-                p.max_averages(),
-                4,
-                "averaging depth must reach every band's processor"
-            );
-        }
-    }
-
-    /// The point of the exercise: enough cycles inside every window to resolve the
-    /// frequency. Below about 4 cycles a measurement is meaningless.
-    #[test]
-    fn every_band_holds_at_least_four_cycles_at_its_lowest_frequency() {
-        let sample_rate = 48_000.0_f32;
-        let mut lower = 20.0_f32;
-        for (fft_size, upper) in RESOLUTION_BANDS {
-            let window_seconds = fft_size as f32 / sample_rate;
-            let cycles = lower * window_seconds;
-            assert!(
-                cycles >= 4.0,
-                "{fft_size}-point window holds only {cycles:.1} cycles at {lower} Hz"
-            );
-            lower = upper;
-        }
-    }
-}
-
 /// Lowest and highest frequency the stitched output covers.
 const F_MIN: f32 = 20.0;
 const F_MAX: f32 = 20_000.0;
@@ -316,4 +211,109 @@ fn group_delay_from_log_axis(freqs: &[f32], phase_deg: &[f32]) -> Vec<f32> {
         };
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn log_axis_spans_the_range_with_even_octave_spacing() {
+        let axis = log_frequency_axis(20.0, 20_000.0, 48);
+
+        assert!((axis[0] - 20.0).abs() < 0.01, "should start at f_min");
+        assert!(
+            (axis[axis.len() - 1] - 20_000.0).abs() < 1.0,
+            "should end at f_max, got {}",
+            axis[axis.len() - 1]
+        );
+
+        // Just under 10 octaves from 20 Hz to 20 kHz, 48 points each.
+        assert!(
+            axis.len() > 470 && axis.len() < 490,
+            "got {} points",
+            axis.len()
+        );
+
+        // Every step is the same ratio.
+        let ratio = axis[1] / axis[0];
+        for w in axis.windows(2) {
+            assert!(
+                (w[1] / w[0] - ratio).abs() < 1e-4,
+                "spacing should be geometric: {} -> {}",
+                w[0],
+                w[1]
+            );
+        }
+    }
+
+    #[test]
+    fn low_frequencies_get_the_longest_fft() {
+        assert_eq!(
+            band_for_frequency(30.0),
+            16384,
+            "30 Hz needs the longest window"
+        );
+        assert_eq!(band_for_frequency(60.0), 16384);
+        assert_eq!(
+            band_for_frequency(10_000.0),
+            512,
+            "10 kHz needs the shortest"
+        );
+    }
+
+    #[test]
+    fn band_assignment_is_monotonic() {
+        let mut previous = usize::MAX;
+        let mut f = 20.0_f32;
+        while f < 20_000.0 {
+            let size = band_for_frequency(f);
+            assert!(
+                size <= previous,
+                "FFT size must not grow with frequency at {f} Hz"
+            );
+            previous = size;
+            f *= 1.05;
+        }
+    }
+
+    /// Delay compensation and averaging depth must reach every internal
+    /// per-band processor, not just the first one. Without this, switching to
+    /// multi-window mode silently drops the operator's delay compensation.
+    #[test]
+    fn set_delay_samples_and_max_averages_reach_every_sub_processor() {
+        let mut mw = MultiWindowProcessor::new(48_000.0);
+        mw.set_delay_samples(480);
+        mw.set_max_averages(4);
+
+        for p in &mw.processors {
+            assert_eq!(
+                p.delay_samples(),
+                480,
+                "delay must reach every band's processor"
+            );
+            assert_eq!(
+                p.max_averages(),
+                4,
+                "averaging depth must reach every band's processor"
+            );
+        }
+    }
+
+    /// The point of the exercise: enough cycles inside every window to resolve the
+    /// frequency. Below about 4 cycles a measurement is meaningless.
+    #[test]
+    fn every_band_holds_at_least_four_cycles_at_its_lowest_frequency() {
+        let sample_rate = 48_000.0_f32;
+        let mut lower = 20.0_f32;
+        for (fft_size, upper) in RESOLUTION_BANDS {
+            let window_seconds = fft_size as f32 / sample_rate;
+            let cycles = lower * window_seconds;
+            assert!(
+                cycles >= 4.0,
+                "{fft_size}-point window holds only {cycles:.1} cycles at {lower} Hz"
+            );
+            lower = upper;
+        }
+    }
 }
