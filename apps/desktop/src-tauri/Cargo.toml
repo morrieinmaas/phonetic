@@ -1,5 +1,8 @@
 [package]
 name = "phonetic"
+# Two bin targets exist (the app and phonetic-cli), so cargo needs to be told
+# which one `cargo run` and the Tauri bundler mean.
+default-run = "phonetic"
 version = "0.1.0"
 description = "Modern audio measurement system"
 authors = ["Moritz"]

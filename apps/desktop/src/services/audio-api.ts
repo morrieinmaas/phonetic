@@ -218,6 +218,8 @@ export const audioApi = {
 	 * Get the rig's current diagnoses, most severe first.
 	 */
 	getDiagnostics: (): Promise<Diagnosis[]> => invoke<Diagnosis[]>("get_diagnostics"),
+
+	/**
 	 * Save a measurement session as pretty-printed JSON at the given path
 	 * @param path - Filesystem path to write the session to
 	 * @param session - The session document to persist

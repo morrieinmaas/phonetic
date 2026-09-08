@@ -3,10 +3,5 @@
 	"identifier": "default",
 	"description": "Core permissions for the Phonetic desktop window",
 	"windows": ["main"],
-	"permissions": [
-		"core:default",
-		"shell:allow-open",
-		"dialog:allow-save",
-		"dialog:allow-open"
-	]
+	"permissions": ["core:default", "shell:allow-open", "dialog:allow-save", "dialog:allow-open"]
 }

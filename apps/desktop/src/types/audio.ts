@@ -115,12 +115,14 @@ export interface Diagnosis {
 	action: string | null;
 	/** Measured delay in samples, present when the diagnosis is about an unapplied delay. */
 	delay_samples: number | null;
+}
+
 /** Settings captured alongside a saved session */
 export interface SessionSettings {
 	sample_rate: number;
 	fft_size: number;
 	multi_window: boolean;
-	smoothing: string;
+	smoothing: SmoothingFraction;
 	delay_samples: number;
 	max_averages: number;
 }
