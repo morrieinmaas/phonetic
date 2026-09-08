@@ -53,6 +53,8 @@ pub fn run() {
             commands::is_multi_window,
             commands::set_smoothing,
             commands::get_diagnostics,
+            commands::set_input_channel_count,
+            commands::set_measurement_channel,
             // Delay finder commands
             commands::find_delay,
             commands::set_delay_finder_max_delay,

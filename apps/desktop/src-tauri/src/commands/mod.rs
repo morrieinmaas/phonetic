@@ -205,6 +205,19 @@ pub fn get_diagnostics(engine: State<'_, AudioEngine>) -> Vec<Diagnosis> {
     diagnose(&engine.rig_snapshot())
 }
 
+/// Configure how many input channels the next stream should open, clamped to
+/// 1-8. Real system tuning uses several mics at once.
+#[tauri::command]
+pub fn set_input_channel_count(engine: State<'_, AudioEngine>, count: usize) {
+    engine.set_input_channel_count(count);
+}
+
+/// Select which input channel feeds level metering and rig diagnostics.
+#[tauri::command]
+pub fn set_measurement_channel(engine: State<'_, AudioEngine>, index: usize) {
+    engine.set_measurement_channel(index);
+}
+
 // ============================================================================
 // Delay Finder Commands
 // ============================================================================
@@ -609,5 +622,20 @@ mod tests {
         assert_eq!(loaded.name, "Command roundtrip");
 
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn channel_count_is_clamped_to_the_supported_range() {
+        let engine = AudioEngine::new();
+        engine.set_input_channel_count(0);
+        assert_eq!(
+            engine.input_channel_count(),
+            1,
+            "must keep at least one channel"
+        );
+        engine.set_input_channel_count(99);
+        assert_eq!(engine.input_channel_count(), 8, "eight is the ceiling");
+        engine.set_input_channel_count(4);
+        assert_eq!(engine.input_channel_count(), 4);
     }
 }

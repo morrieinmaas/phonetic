@@ -2,10 +2,11 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, StreamConfig};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 
+use super::deinterleave::ChannelBuffers;
 use super::generator::{Generator, SignalType};
 use super::realtime::configure_audio_thread;
 use crate::dsp::{
@@ -20,6 +21,10 @@ use super::coreaudio_backend::{
 
 const FFT_SIZE: usize = 2048;
 const DEFAULT_SAMPLE_RATE: f32 = 48000.0;
+
+/// Real system tuning uses several mics at once. Eight covers the practical
+/// ceiling of interfaces used for live sound measurement.
+pub const MAX_INPUT_CHANNELS: usize = 8;
 
 /// Audio backend selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -108,10 +113,19 @@ pub struct AudioEngine {
     input_device_name: Arc<Mutex<Option<String>>>,
     output_device_name: Arc<Mutex<Option<String>>>,
     fft_processor: Arc<Mutex<FftProcessor>>,
-    transfer_function_processor: Arc<Mutex<TransferFunctionProcessor>>,
+    // One transfer function processor per input channel, so several mic
+    // positions can be measured (and later spatially averaged) at once.
+    // Always MAX_INPUT_CHANNELS long; only the first `input_channel_count`
+    // are fed by the audio callback.
+    transfer_function_processors: Vec<Arc<Mutex<TransferFunctionProcessor>>>,
     multi_window_processor: Arc<Mutex<MultiWindowProcessor>>,
     // Whether the multi-time-window processor (vs. the single-FFT processor) is active
     multi_window_enabled: Arc<AtomicBool>,
+    // Number of input channels to open on the next stream start, clamped to
+    // 1..=MAX_INPUT_CHANNELS.
+    input_channel_count: Arc<AtomicUsize>,
+    // Which input channel feeds level metering and rig diagnostics.
+    measurement_channel: Arc<AtomicUsize>,
     generator: Arc<Mutex<Generator>>,
     generator_active: Arc<AtomicBool>,
     stop_signal: Arc<AtomicBool>,
@@ -130,7 +144,7 @@ pub struct AudioEngine {
 // - All atomic fields (is_running, sample_rate, buffer_size, generator_active, stop_signal)
 //   are inherently thread-safe via std::sync::atomic
 // - All Mutex-wrapped fields (input_device_name, output_device_name, fft_processor,
-//   transfer_function_processor, multi_window_processor, generator, thread_handle,
+//   transfer_function_processors, multi_window_processor, generator, thread_handle,
 //   reference_buffer) use parking_lot::Mutex which is Send + Sync
 // - Arc provides thread-safe reference counting
 // The thread_handle stores a JoinHandle which is Send, and we only mutate it under a Mutex lock.
@@ -141,10 +155,14 @@ unsafe impl Sync for AudioEngine {}
 impl AudioEngine {
     pub fn new() -> Self {
         let fft_processor = Arc::new(Mutex::new(FftProcessor::new(FFT_SIZE)));
-        let transfer_function_processor = Arc::new(Mutex::new(TransferFunctionProcessor::new(
-            FFT_SIZE,
-            DEFAULT_SAMPLE_RATE,
-        )));
+        let transfer_function_processors = (0..MAX_INPUT_CHANNELS)
+            .map(|_| {
+                Arc::new(Mutex::new(TransferFunctionProcessor::new(
+                    FFT_SIZE,
+                    DEFAULT_SAMPLE_RATE,
+                )))
+            })
+            .collect();
         let multi_window_processor =
             Arc::new(Mutex::new(MultiWindowProcessor::new(DEFAULT_SAMPLE_RATE)));
         let generator = Arc::new(Mutex::new(Generator::new(DEFAULT_SAMPLE_RATE as f64)));
@@ -156,9 +174,11 @@ impl AudioEngine {
             input_device_name: Arc::new(Mutex::new(None)),
             output_device_name: Arc::new(Mutex::new(None)),
             fft_processor,
-            transfer_function_processor,
+            transfer_function_processors,
             multi_window_processor,
             multi_window_enabled: Arc::new(AtomicBool::new(false)),
+            input_channel_count: Arc::new(AtomicUsize::new(1)),
+            measurement_channel: Arc::new(AtomicUsize::new(0)),
             generator,
             generator_active: Arc::new(AtomicBool::new(false)),
             stop_signal: Arc::new(AtomicBool::new(false)),
@@ -298,13 +318,13 @@ impl AudioEngine {
         *self.output_device_name.lock() = Some(output_name.clone());
 
         // Update generator and transfer function processor sample rates.
-        // Both processors must be told: the multi-window one derives its whole
+        // Every processor must be told: the multi-window one derives its whole
         // frequency axis from this, so a stale rate silently mislabels every
         // reading on any device that is not 48 kHz.
         self.generator.lock().set_sample_rate(sample_rate as f64);
-        self.transfer_function_processor
-            .lock()
-            .set_sample_rate(sample_rate as f32);
+        for processor in &self.transfer_function_processors {
+            processor.lock().set_sample_rate(sample_rate as f32);
+        }
         self.multi_window_processor
             .lock()
             .set_sample_rate(sample_rate as f32);
@@ -315,9 +335,14 @@ impl AudioEngine {
 
         // Clone Arcs for the audio thread
         let fft_processor = Arc::clone(&self.fft_processor);
-        let transfer_function_processor = Arc::clone(&self.transfer_function_processor);
+        let transfer_function_processors = self.transfer_function_processors.clone();
         let multi_window_processor = Arc::clone(&self.multi_window_processor);
         let multi_window_enabled = Arc::clone(&self.multi_window_enabled);
+        let channel_count = self
+            .input_channel_count
+            .load(Ordering::Relaxed)
+            .clamp(1, MAX_INPUT_CHANNELS);
+        let measurement_channel = Arc::clone(&self.measurement_channel);
         let generator = Arc::clone(&self.generator);
         let generator_active = Arc::clone(&self.generator_active);
         let is_running = Arc::clone(&self.is_running);
@@ -334,11 +359,13 @@ impl AudioEngine {
                 output_device,
                 sample_rate,
                 buffer_size,
+                channel_count,
                 output_channels,
                 fft_processor,
-                transfer_function_processor,
+                transfer_function_processors,
                 multi_window_processor,
                 multi_window_enabled,
+                measurement_channel,
                 generator,
                 generator_active,
                 is_running,
@@ -427,13 +454,13 @@ impl AudioEngine {
         *self.output_device_name.lock() = Some(output_name.clone());
 
         // Update generator and transfer function processor sample rates.
-        // Both processors must be told: the multi-window one derives its whole
+        // Every processor must be told: the multi-window one derives its whole
         // frequency axis from this, so a stale rate silently mislabels every
         // reading on any device that is not 48 kHz.
         self.generator.lock().set_sample_rate(sample_rate as f64);
-        self.transfer_function_processor
-            .lock()
-            .set_sample_rate(sample_rate as f32);
+        for processor in &self.transfer_function_processors {
+            processor.lock().set_sample_rate(sample_rate as f32);
+        }
         self.multi_window_processor
             .lock()
             .set_sample_rate(sample_rate as f32);
@@ -444,9 +471,14 @@ impl AudioEngine {
 
         // Clone Arcs for the audio thread
         let fft_processor = Arc::clone(&self.fft_processor);
-        let transfer_function_processor = Arc::clone(&self.transfer_function_processor);
+        let transfer_function_processors = self.transfer_function_processors.clone();
         let multi_window_processor = Arc::clone(&self.multi_window_processor);
         let multi_window_enabled = Arc::clone(&self.multi_window_enabled);
+        let channel_count = self
+            .input_channel_count
+            .load(Ordering::Relaxed)
+            .clamp(1, MAX_INPUT_CHANNELS);
+        let measurement_channel = Arc::clone(&self.measurement_channel);
         let generator = Arc::clone(&self.generator);
         let generator_active = Arc::clone(&self.generator_active);
         let is_running = Arc::clone(&self.is_running);
@@ -462,11 +494,13 @@ impl AudioEngine {
                 output_id,
                 sample_rate,
                 buffer_size,
+                channel_count,
                 exclusive_mode,
                 fft_processor,
-                transfer_function_processor,
+                transfer_function_processors,
                 multi_window_processor,
                 multi_window_enabled,
+                measurement_channel,
                 generator,
                 generator_active,
                 is_running,
@@ -531,12 +565,53 @@ impl AudioEngine {
         if self.multi_window_enabled.load(Ordering::Relaxed) {
             self.multi_window_processor.lock().get_data()
         } else {
-            self.transfer_function_processor.lock().get_data()
+            self.transfer_function_processors[0].lock().get_data()
         }
     }
 
+    /// Transfer function data for one input channel. In multi-window mode
+    /// there is a single shared processor (widening that one is future work),
+    /// so every index returns the same data there.
+    pub fn transfer_function_data_for_channel(&self, index: usize) -> TransferFunctionData {
+        if self.multi_window_enabled.load(Ordering::Relaxed) {
+            return self.multi_window_processor.lock().get_data();
+        }
+        let clamped = index.min(self.transfer_function_processors.len() - 1);
+        self.transfer_function_processors[clamped].lock().get_data()
+    }
+
+    /// Configure how many input channels the next stream should open.
+    /// Clamped to 1..=MAX_INPUT_CHANNELS; takes effect on the next
+    /// `start_stream`.
+    pub fn set_input_channel_count(&self, count: usize) {
+        let clamped = count.clamp(1, MAX_INPUT_CHANNELS);
+        self.input_channel_count.store(clamped, Ordering::Relaxed);
+        log::info!("Input channel count set to {}", clamped);
+    }
+
+    /// Number of input channels the next stream will open.
+    pub fn input_channel_count(&self) -> usize {
+        self.input_channel_count.load(Ordering::Relaxed)
+    }
+
+    /// Select which input channel feeds level metering and rig diagnostics.
+    /// Out-of-range indices for the stream's actual channel count fall back
+    /// safely at read time; `ChannelBuffers::channel` never panics.
+    pub fn set_measurement_channel(&self, index: usize) {
+        let clamped = index.min(MAX_INPUT_CHANNELS - 1);
+        self.measurement_channel.store(clamped, Ordering::Relaxed);
+        log::info!("Measurement channel set to {}", clamped);
+    }
+
+    /// Currently selected measurement channel.
+    pub fn measurement_channel(&self) -> usize {
+        self.measurement_channel.load(Ordering::Relaxed)
+    }
+
     pub fn reset_averaging(&self) {
-        self.transfer_function_processor.lock().reset_averaging();
+        for processor in &self.transfer_function_processors {
+            processor.lock().reset_averaging();
+        }
         self.multi_window_processor.lock().reset_averaging();
         log::info!("Transfer function averaging reset");
     }
@@ -551,12 +626,12 @@ impl AudioEngine {
 
         let sample_rate = self.sample_rate.load(Ordering::Relaxed) as f32;
         self.fft_processor.lock().set_fft_size(size);
-        self.transfer_function_processor.lock().set_fft_size(size);
-
-        // Update sample rate in case it changed
-        self.transfer_function_processor
-            .lock()
-            .set_sample_rate(sample_rate);
+        for processor in &self.transfer_function_processors {
+            let mut processor = processor.lock();
+            processor.set_fft_size(size);
+            // Update sample rate in case it changed
+            processor.set_sample_rate(sample_rate);
+        }
 
         log::info!("FFT size set to {}", size);
         Ok(())
@@ -564,9 +639,9 @@ impl AudioEngine {
 
     /// Delay the transfer function reference to compensate for propagation time.
     pub fn set_transfer_function_delay(&self, delay_samples: usize) {
-        self.transfer_function_processor
-            .lock()
-            .set_delay_samples(delay_samples);
+        for processor in &self.transfer_function_processors {
+            processor.lock().set_delay_samples(delay_samples);
+        }
         self.multi_window_processor
             .lock()
             .set_delay_samples(delay_samples);
@@ -574,12 +649,14 @@ impl AudioEngine {
 
     /// Current transfer function reference delay in samples.
     pub fn transfer_function_delay(&self) -> usize {
-        self.transfer_function_processor.lock().delay_samples()
+        self.transfer_function_processors[0].lock().delay_samples()
     }
 
     /// Frames retained by the transfer function running average.
     pub fn set_max_averages(&self, n: usize) {
-        self.transfer_function_processor.lock().set_max_averages(n);
+        for processor in &self.transfer_function_processors {
+            processor.lock().set_max_averages(n);
+        }
         self.multi_window_processor.lock().set_max_averages(n);
     }
 
@@ -614,7 +691,7 @@ impl AudioEngine {
 
     /// Current FFT size in samples.
     pub fn fft_size(&self) -> usize {
-        self.transfer_function_processor.lock().fft_size()
+        self.transfer_function_processors[0].lock().fft_size()
     }
 
     /// Record a delay measurement so drift detection has history.
@@ -677,11 +754,13 @@ fn run_cpal_streams(
     output_device: Device,
     sample_rate: u32,
     buffer_size: u32,
+    channel_count: usize,
     output_channels: u16,
     fft_processor: Arc<Mutex<FftProcessor>>,
-    transfer_function_processor: Arc<Mutex<TransferFunctionProcessor>>,
+    transfer_function_processors: Vec<Arc<Mutex<TransferFunctionProcessor>>>,
     multi_window_processor: Arc<Mutex<MultiWindowProcessor>>,
     multi_window_enabled: Arc<AtomicBool>,
+    measurement_channel: Arc<AtomicUsize>,
     generator: Arc<Mutex<Generator>>,
     generator_active: Arc<AtomicBool>,
     is_running: Arc<AtomicBool>,
@@ -693,7 +772,7 @@ fn run_cpal_streams(
     configure_audio_thread();
 
     let input_config = StreamConfig {
-        channels: 1,
+        channels: channel_count as u16,
         sample_rate: cpal::SampleRate(sample_rate),
         buffer_size: cpal::BufferSize::Fixed(buffer_size),
     };
@@ -705,41 +784,65 @@ fn run_cpal_streams(
     };
 
     // Clone references for input callback
-    let tf_processor = Arc::clone(&transfer_function_processor);
+    let tf_processors = transfer_function_processors.clone();
     let mw_processor = Arc::clone(&multi_window_processor);
     let mw_enabled = Arc::clone(&multi_window_enabled);
+    let meas_channel = Arc::clone(&measurement_channel);
     let ref_buffer_for_input = Arc::clone(&reference_buffer);
     let stats = Arc::clone(&level_stats);
+
+    // Allocated once, up front, sized for the maximum supported channel count
+    // so it never needs to grow. Deinterleaving inside the callback below must
+    // not allocate: that risks a lock in the allocator and an audible dropout.
+    let mut channel_buffers =
+        ChannelBuffers::new(channel_count, buffer_size as usize * MAX_INPUT_CHANNELS);
 
     // Build input stream
     let input_stream = match input_device.build_input_stream(
         &input_config,
         move |data: &[f32], _: &cpal::InputCallbackInfo| {
-            // Process FFT for spectrum analyzer
-            let mut fft_proc = fft_processor.lock();
-            fft_proc.process(data);
+            channel_buffers.fill(data);
+            let frame_len = channel_buffers.channel(0).len();
 
             // Process transfer function if we have reference data
             let ref_data: Vec<f32>;
             {
                 let mut ref_buf = ref_buffer_for_input.lock();
-                if ref_buf.len() >= data.len() {
+                if ref_buf.len() >= frame_len {
                     // Take the oldest reference samples matching input length
-                    ref_data = ref_buf.drain(..data.len()).collect();
+                    ref_data = ref_buf.drain(..frame_len).collect();
                 } else {
                     return; // Not enough reference data yet
                 }
             }
 
-            stats.lock().update(data, &ref_data);
+            let meas_index = meas_channel
+                .load(Ordering::Relaxed)
+                .min(channel_buffers.channel_count().saturating_sub(1));
+            let measurement_data = channel_buffers.channel(meas_index);
+
+            // Process FFT for spectrum analyzer, using whichever channel is
+            // selected for metering.
+            let mut fft_proc = fft_processor.lock();
+            fft_proc.process(measurement_data);
+
+            stats.lock().update(measurement_data, &ref_data);
 
             // Process transfer function
             // Route to whichever resolution mode is active. Both processors keep
             // their own state, so switching modes never loses the other's averages.
             if mw_enabled.load(Ordering::Relaxed) {
-                mw_processor.lock().process(data, &ref_data);
+                mw_processor.lock().process(measurement_data, &ref_data);
             } else {
-                tf_processor.lock().process(data, &ref_data);
+                for (index, processor) in tf_processors
+                    .iter()
+                    .enumerate()
+                    .take(channel_buffers.channel_count())
+                {
+                    processor
+                        .lock()
+                        .process(channel_buffers.channel(index), &ref_data);
+                }
             }
         },
         |err| log::error!("Input stream error: {}", err),
@@ -829,11 +932,13 @@ fn run_coreaudio_streams(
     output_device_id: coreaudio::sys::AudioDeviceID,
     sample_rate: u32,
     buffer_size: u32,
+    channel_count: usize,
     exclusive_mode: bool,
     fft_processor: Arc<Mutex<FftProcessor>>,
-    transfer_function_processor: Arc<Mutex<TransferFunctionProcessor>>,
+    transfer_function_processors: Vec<Arc<Mutex<TransferFunctionProcessor>>>,
     multi_window_processor: Arc<Mutex<MultiWindowProcessor>>,
     multi_window_enabled: Arc<AtomicBool>,
+    measurement_channel: Arc<AtomicUsize>,
     generator: Arc<Mutex<Generator>>,
     generator_active: Arc<AtomicBool>,
     is_running: Arc<AtomicBool>,
@@ -844,7 +949,13 @@ fn run_coreaudio_streams(
     // Set real-time priority for this audio thread
     configure_audio_thread();
 
-    let config = CoreAudioConfig {
+    let input_config = CoreAudioConfig {
+        sample_rate: sample_rate as f64,
+        buffer_size,
+        channels: channel_count as u32,
+        exclusive_mode,
+    };
+    let output_config = CoreAudioConfig {
         sample_rate: sample_rate as f64,
         buffer_size,
         channels: 1,
@@ -852,41 +963,65 @@ fn run_coreaudio_streams(
     };
 
     // Clone references for input callback
-    let tf_processor = Arc::clone(&transfer_function_processor);
+    let tf_processors = transfer_function_processors.clone();
     let mw_processor = Arc::clone(&multi_window_processor);
     let mw_enabled = Arc::clone(&multi_window_enabled);
+    let meas_channel = Arc::clone(&measurement_channel);
     let ref_buffer_for_input = Arc::clone(&reference_buffer);
     let fft_proc_clone = Arc::clone(&fft_processor);
     let stats = Arc::clone(&level_stats);
 
+    // Allocated once, up front, sized for the maximum supported channel count
+    // so it never needs to grow. Deinterleaving inside the callback below must
+    // not allocate: that risks a lock in the allocator and an audible dropout.
+    let mut channel_buffers =
+        ChannelBuffers::new(channel_count, buffer_size as usize * MAX_INPUT_CHANNELS);
+
     // Create input stream
     let mut input_stream = match CoreAudioInputStream::new(
         Some(input_device_id),
-        config.clone(),
+        input_config,
         move |data: &[f32]| {
-            // Process FFT for spectrum analyzer
-            let mut fft_proc = fft_proc_clone.lock();
-            fft_proc.process(data);
+            channel_buffers.fill(data);
+            let frame_len = channel_buffers.channel(0).len();
 
             // Process transfer function if we have reference data
             let ref_data: Vec<f32>;
             {
                 let mut ref_buf = ref_buffer_for_input.lock();
-                if ref_buf.len() >= data.len() {
-                    ref_data = ref_buf.drain(..data.len()).collect();
+                if ref_buf.len() >= frame_len {
+                    ref_data = ref_buf.drain(..frame_len).collect();
                 } else {
                     return;
                 }
             }
 
-            stats.lock().update(data, &ref_data);
+            let meas_index = meas_channel
+                .load(Ordering::Relaxed)
+                .min(channel_buffers.channel_count().saturating_sub(1));
+            let measurement_data = channel_buffers.channel(meas_index);
+
+            // Process FFT for spectrum analyzer, using whichever channel is
+            // selected for metering.
+            let mut fft_proc = fft_proc_clone.lock();
+            fft_proc.process(measurement_data);
+
+            stats.lock().update(measurement_data, &ref_data);
 
             // Route to whichever resolution mode is active. Both processors keep
             // their own state, so switching modes never loses the other's averages.
             if mw_enabled.load(Ordering::Relaxed) {
-                mw_processor.lock().process(data, &ref_data);
+                mw_processor.lock().process(measurement_data, &ref_data);
             } else {
-                tf_processor.lock().process(data, &ref_data);
+                for (index, processor) in tf_processors
+                    .iter()
+                    .enumerate()
+                    .take(channel_buffers.channel_count())
+                {
+                    processor
+                        .lock()
+                        .process(channel_buffers.channel(index), &ref_data);
+                }
             }
         },
     ) {
@@ -904,7 +1039,7 @@ fn run_coreaudio_streams(
     // Create output stream
     let mut output_stream = match CoreAudioOutputStream::new(
         Some(output_device_id),
-        config,
+        output_config,
         move |data: &mut [f32]| {
             if generator_active.load(Ordering::Acquire) {
                 let mut gen = generator.lock();
@@ -965,4 +1100,74 @@ fn run_coreaudio_streams(
 
     is_running.store(false, Ordering::Relaxed);
     log::info!("CoreAudio streams stopped");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Simulates exactly what the audio callback does: deinterleave a
+    /// multi-channel buffer, then route each channel's samples to its own
+    /// `TransferFunctionProcessor`. Proves channel 1 (half the gain of
+    /// channel 0) ends up in `transfer_function_processors[1]`, not `[0]`.
+    #[test]
+    fn each_channel_processor_tracks_its_own_signal_independently() {
+        let engine = AudioEngine::new();
+
+        let frames = FFT_SIZE * 4;
+        let reference: Vec<f32> = (0..frames)
+            .map(|i| {
+                (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / DEFAULT_SAMPLE_RATE).sin() * 0.5
+            })
+            .collect();
+
+        // Interleave [ch0, ch1, ch0, ch1, ...]: channel 0 at unity gain,
+        // channel 1 at half gain (-6 dB).
+        let mut interleaved = Vec::with_capacity(frames * 2);
+        for &sample in &reference {
+            interleaved.push(sample);
+            interleaved.push(sample * 0.5);
+        }
+
+        let mut buffers = ChannelBuffers::new(2, frames);
+        buffers.fill(&interleaved);
+
+        for (index, processor) in engine
+            .transfer_function_processors
+            .iter()
+            .enumerate()
+            .take(2)
+        {
+            processor.lock().process(buffers.channel(index), &reference);
+        }
+
+        let channel_0 = engine.transfer_function_data_for_channel(0);
+        let channel_1 = engine.transfer_function_data_for_channel(1);
+
+        let bin_1k = (1000.0 / DEFAULT_SAMPLE_RATE * FFT_SIZE as f32).round() as usize;
+        assert!(
+            channel_0.magnitude_db[bin_1k].abs() < 3.0,
+            "channel 0 should read ~0 dB (unity gain), got {}",
+            channel_0.magnitude_db[bin_1k]
+        );
+        assert!(
+            (channel_1.magnitude_db[bin_1k] - (-6.02)).abs() < 2.0,
+            "channel 1 should read ~-6 dB (half gain), got {}",
+            channel_1.magnitude_db[bin_1k]
+        );
+
+        // get_transfer_function_data() must keep channel 0 as its source so
+        // every existing caller and test keeps working.
+        let default_data = engine.get_transfer_function_data();
+        assert_eq!(default_data.magnitude_db, channel_0.magnitude_db);
+    }
+
+    #[test]
+    fn measurement_channel_is_clamped_to_the_supported_range() {
+        let engine = AudioEngine::new();
+        engine.set_measurement_channel(3);
+        assert_eq!(engine.measurement_channel(), 3);
+        engine.set_measurement_channel(99);
+        assert_eq!(engine.measurement_channel(), MAX_INPUT_CHANNELS - 1);
+    }
 }
