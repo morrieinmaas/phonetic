@@ -561,12 +561,13 @@ export const TransferFunctionDisplay = ({
 			: 0;
 
 	return (
-		<div className="flex flex-col h-full min-h-0">
-			<div className="flex items-center justify-between mb-2 flex-shrink-0 flex-wrap gap-2">
+		<div className="flex h-full min-h-0 flex-col gap-2">
+			{/* Identity and live measurement quality */}
+			<div className="flex flex-shrink-0 items-center justify-between gap-3">
 				<h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
 					Transfer Function
 				</h2>
-				<div className="flex items-center gap-3 flex-wrap">
+				<div className="flex items-center gap-3">
 					{isRunning && data && (
 						<div className="flex items-center gap-2">
 							<span className="text-xs text-muted-foreground">Coherence:</span>
@@ -585,7 +586,14 @@ export const TransferFunctionDisplay = ({
 							</div>
 						</div>
 					)}
-					<TraceControls currentData={data} isRunning={isRunning} />
+				</div>
+			</div>
+
+			{/* Control bar: capture and trace actions on the left, view options on
+			    the right, so the two kinds of control stay visually distinct. */}
+			<div className="flex flex-shrink-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-border/60 bg-muted/30 px-2 py-1.5">
+				<TraceControls currentData={data} isRunning={isRunning} />
+				<div className="ml-auto flex items-center gap-2">
 					<ReferenceCurveSelector
 						selectedCurve={selectedRefCurve}
 						onCurveChange={setSelectedRefCurve}
@@ -594,6 +602,7 @@ export const TransferFunctionDisplay = ({
 					/>
 					<button
 						type="button"
+						aria-pressed={autoZoom}
 						onClick={() => setAutoZoom(!autoZoom)}
 						className={`px-2 py-1 text-xs rounded border transition-colors ${
 							autoZoom
@@ -613,14 +622,19 @@ export const TransferFunctionDisplay = ({
 					</button>
 				</div>
 			</div>
-			<div className="mb-2 flex-shrink-0 rounded-md border border-border/50 p-2">
-				<EqControls />
-			</div>
+			<details className="flex-shrink-0 rounded-md border border-border/60 bg-muted/20">
+				<summary className="cursor-pointer select-none px-2 py-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground marker:text-muted-foreground">
+					Virtual EQ
+				</summary>
+				<div className="border-t border-border/60 p-2">
+					<EqControls />
+				</div>
+			</details>
 			{/* biome-ignore lint/a11y/useKeyWithClickEvents: pointer-only cursor placement on a continuous log-frequency plot has no meaningful keyboard equivalent */}
 			<div
 				ref={containerRef}
 				data-testid="transfer-function-plot"
-				className="flex-1 min-h-[220px] relative"
+				className="relative min-h-[280px] flex-1"
 				onClick={handlePlotClick}
 				onDoubleClick={handleResetZoom}
 			>

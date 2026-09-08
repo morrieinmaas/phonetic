@@ -71,6 +71,54 @@
 	border-color: var(--color-border);
 }
 
+/* Tells the platform to render scrollbars and native controls for the active
+   theme. Without it, dark mode gets light scrollbars and light select popups. */
+:root {
+	color-scheme: dark;
+}
+
+.light {
+	color-scheme: light;
+}
+
+/* Every interactive element gets a visible focus ring. Nothing had one, which
+   makes the app unusable by keyboard — and a measurement tool is often driven
+   one-handed in the dark with the other hand on a console. :focus-visible keeps
+   the ring off mouse clicks. */
+:where(button, [role="button"], a, input, select, textarea, summary, [tabindex]):focus-visible {
+	outline: 2px solid var(--color-ring);
+	outline-offset: 2px;
+	border-radius: var(--radius-sm);
+}
+
+/* Native selects inherit the page background on some platforms and render
+   unreadable in dark mode; state both explicitly. */
+select {
+	background-color: var(--color-card);
+	color: var(--color-foreground);
+}
+
+select option {
+	background-color: var(--color-card);
+	color: var(--color-foreground);
+}
+
+/* Numeric readouts line up column-wise when the digits are tabular — these are
+   values an operator compares at a glance. */
+.font-mono {
+	font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+	}
+}
+
 body {
 	font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
 		"Helvetica Neue", Arial, sans-serif;
