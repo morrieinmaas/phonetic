@@ -225,7 +225,7 @@ export const App = () => {
 
 			{/* Rig diagnoses sit above the measurement area: they appear and vanish
 			    on a poll, and below the status bar they shoved the footer around. */}
-			<div className="flex-shrink-0 px-4 pt-4 empty:hidden">
+			<div className="flex flex-shrink-0 flex-col gap-2 px-4 pt-4 empty:hidden">
 				{licenseState && !shouldBlockUsage(licenseState) && (
 					<LicenseDialog state={licenseState} onStateChange={setLicenseState} />
 				)}

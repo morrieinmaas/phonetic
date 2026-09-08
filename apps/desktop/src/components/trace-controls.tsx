@@ -86,64 +86,81 @@ export const TraceControls = ({ currentData, isRunning }: TraceControlsProps) =>
 	const canCapture = isRunning && currentData && currentData.frequencies.length > 0;
 
 	return (
-		<div className="flex items-center gap-2">
-			{/* Slot buttons for quick A/B comparison */}
-			<div className="flex items-center gap-1">
-				<span className="text-xs text-muted-foreground mr-1">Store:</span>
-				{SLOTS.map((slot) => {
-					const trace = getSlotTrace(slot);
-					const hasTrace = !!trace;
+		<div className="flex flex-col gap-3">
+			<h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+				Measurement Traces
+			</h3>
 
-					return (
-						<button
-							key={slot}
-							type="button"
-							data-testid={slot === "A" ? "capture-trace" : undefined}
-							onClick={() => handleSlotClick(slot)}
-							disabled={!hasTrace && !canCapture}
-							title={
-								hasTrace ? `Clear Trace ${slot} (click to remove)` : `Capture to Trace ${slot}`
-							}
-							className={`
+			{/* Slot buttons for quick A/B comparison */}
+			<div className="flex flex-col gap-1.5">
+				<span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+					Capture to slot
+				</span>
+				<p className="text-xs text-muted-foreground">
+					{canCapture
+						? "Click a slot to store the live trace. Click it again to clear."
+						: "Start the stream to capture a trace."}
+				</p>
+				<div className="flex items-center gap-1.5">
+					{SLOTS.map((slot) => {
+						const trace = getSlotTrace(slot);
+						const hasTrace = !!trace;
+
+						return (
+							<button
+								key={slot}
+								type="button"
+								data-testid={slot === "A" ? "capture-trace" : undefined}
+								onClick={() => handleSlotClick(slot)}
+								disabled={!hasTrace && !canCapture}
+								title={
+									hasTrace ? `Clear Trace ${slot} (click to remove)` : `Capture to Trace ${slot}`
+								}
+								className={`
                 w-7 h-7 text-xs font-bold rounded border transition-all
                 ${hasTrace ? "border-transparent ring-2" : "border-border hover:border-primary/50"}
                 disabled:opacity-40 disabled:cursor-not-allowed
                 hover:scale-105 active:scale-95
               `}
-							style={{
-								backgroundColor: hasTrace ? trace.color : undefined,
-								color: hasTrace ? "white" : undefined,
-								boxShadow: hasTrace ? `0 0 8px ${trace.color}40` : undefined,
-								["--tw-ring-color" as string]: hasTrace ? trace.color : undefined,
-							}}
-						>
-							{slot}
-						</button>
-					);
-				})}
+								style={{
+									backgroundColor: hasTrace ? trace.color : undefined,
+									color: hasTrace ? "white" : undefined,
+									boxShadow: hasTrace ? `0 0 8px ${trace.color}40` : undefined,
+									["--tw-ring-color" as string]: hasTrace ? trace.color : undefined,
+								}}
+							>
+								{slot}
+							</button>
+						);
+					})}
+				</div>
 			</div>
 
 			{/* Apply a measured delay to compensate the transfer function reference */}
-			<div className="flex items-center gap-1 ml-2 border-l border-border pl-2">
-				<span className="text-xs text-muted-foreground mr-1">Delay:</span>
-				<input
-					type="number"
-					min={0}
-					value={delayInput}
-					onChange={(e) => setDelayInput(e.target.value)}
-					placeholder="samples"
-					className="w-16 px-1 py-0.5 text-xs rounded border border-border bg-background"
-				/>
-				<button
-					type="button"
-					data-testid="apply-delay"
-					onClick={handleApplyDelay}
-					disabled={delayInput === ""}
-					title="Apply the measured delay to compensate the transfer function reference"
-					className="px-2 py-1 text-xs rounded border border-border hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed"
-				>
-					Apply
-				</button>
+			<div className="flex flex-col gap-1.5 border-t border-border pt-3">
+				<span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+					Delay compensation
+				</span>
+				<div className="flex items-center gap-1.5">
+					<input
+						type="number"
+						min={0}
+						value={delayInput}
+						onChange={(e) => setDelayInput(e.target.value)}
+						placeholder="samples"
+						className="flex-1 min-w-0 px-2 py-1 text-xs rounded border border-border bg-background"
+					/>
+					<button
+						type="button"
+						data-testid="apply-delay"
+						onClick={handleApplyDelay}
+						disabled={delayInput === ""}
+						title="Apply the measured delay to compensate the transfer function reference"
+						className="px-2 py-1 text-xs rounded border border-border hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed"
+					>
+						Apply
+					</button>
+				</div>
 				{delayStatus === "applied" && (
 					<span className="text-[10px] text-muted-foreground">Applied {appliedDelay} smp</span>
 				)}
@@ -153,14 +170,14 @@ export const TraceControls = ({ currentData, isRunning }: TraceControlsProps) =>
 			</div>
 
 			{/* Average the currently visible traces into one spatially-averaged trace */}
-			<div className="flex items-center gap-1 ml-2 border-l border-border pl-2">
+			<div className="flex flex-col gap-1.5 border-t border-border pt-3">
 				<button
 					type="button"
 					data-testid="average-traces"
 					onClick={handleAverageTraces}
 					disabled={visibleTraces.length === 0}
 					title="Average the currently visible traces in the complex domain"
-					className="px-2 py-1 text-xs rounded border border-border hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed"
+					className="w-full px-2 py-1.5 text-xs rounded border border-border hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed"
 				>
 					Average selected
 				</button>
@@ -171,8 +188,10 @@ export const TraceControls = ({ currentData, isRunning }: TraceControlsProps) =>
 
 			{/* Show/hide toggle buttons for each stored trace */}
 			{traces.length > 0 && (
-				<div className="flex items-center gap-1 ml-2 border-l border-border pl-2">
-					<span className="text-xs text-muted-foreground mr-1">Show:</span>
+				<div className="flex flex-col gap-1.5 border-t border-border pt-3">
+					<span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+						Show
+					</span>
 					{traces.slice(-4).map((trace) => (
 						<button
 							key={trace.id}
