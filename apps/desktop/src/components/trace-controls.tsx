@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { audioApi } from "../services/audio-api";
 import { applyMeasuredDelay } from "../services/delay-apply";
 import { useTraceStore } from "../stores/trace-store";
 import type { TraceSlot, TransferFunctionData } from "../types/audio";
@@ -11,12 +12,20 @@ interface TraceControlsProps {
 const SLOTS: TraceSlot[] = ["A", "B", "C", "D"];
 
 export const TraceControls = ({ currentData, isRunning }: TraceControlsProps) => {
-	const { traces, slots, captureToSlot, toggleTraceVisibility, deleteTrace, clearAllTraces } =
-		useTraceStore();
+	const {
+		traces,
+		slots,
+		captureToSlot,
+		toggleTraceVisibility,
+		deleteTrace,
+		clearAllTraces,
+		captureTrace,
+	} = useTraceStore();
 	const [showList, setShowList] = useState(false);
 	const [delayInput, setDelayInput] = useState("");
 	const [delayStatus, setDelayStatus] = useState<"idle" | "applied" | "rejected">("idle");
 	const [appliedDelay, setAppliedDelay] = useState<number | null>(null);
+	const [averageStatus, setAverageStatus] = useState<"idle" | "error">("idle");
 
 	const handleApplyDelay = useCallback(async () => {
 		const delaySamples = Number(delayInput);
@@ -31,6 +40,19 @@ export const TraceControls = ({ currentData, isRunning }: TraceControlsProps) =>
 			setDelayStatus("rejected");
 		}
 	}, [delayInput]);
+
+	const visibleTraces = traces.filter((trace) => trace.visible);
+
+	const handleAverageTraces = useCallback(async () => {
+		if (visibleTraces.length === 0) return;
+		try {
+			const averaged = await audioApi.averageTraces(visibleTraces.map((trace) => trace.data));
+			captureTrace(averaged, `Spatial average (${visibleTraces.length})`);
+			setAverageStatus("idle");
+		} catch {
+			setAverageStatus("error");
+		}
+	}, [visibleTraces, captureTrace]);
 
 	const handleSlotClick = useCallback(
 		(slot: TraceSlot) => {
@@ -127,6 +149,23 @@ export const TraceControls = ({ currentData, isRunning }: TraceControlsProps) =>
 				)}
 				{delayStatus === "rejected" && (
 					<span className="text-[10px] text-destructive">Invalid delay</span>
+				)}
+			</div>
+
+			{/* Average the currently visible traces into one spatially-averaged trace */}
+			<div className="flex items-center gap-1 ml-2 border-l border-border pl-2">
+				<button
+					type="button"
+					data-testid="average-traces"
+					onClick={handleAverageTraces}
+					disabled={visibleTraces.length === 0}
+					title="Average the currently visible traces in the complex domain"
+					className="px-2 py-1 text-xs rounded border border-border hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed"
+				>
+					Average selected
+				</button>
+				{averageStatus === "error" && (
+					<span className="text-[10px] text-destructive">Averaging failed</span>
 				)}
 			</div>
 

@@ -55,6 +55,7 @@ pub fn run() {
             commands::get_diagnostics,
             commands::set_input_channel_count,
             commands::set_measurement_channel,
+            commands::average_traces,
             // Delay finder commands
             commands::find_delay,
             commands::set_delay_finder_max_delay,

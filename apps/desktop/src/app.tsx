@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ChannelSelector } from "./components/channel-selector";
 import { DeviceSelector } from "./components/device-selector";
 import { DiagnosticsBanner } from "./components/diagnostics-banner";
 import { GeneratorControls } from "./components/generator-controls";
@@ -62,6 +63,8 @@ export const App = () => {
 		spectrumData,
 		transferFunctionData,
 		fftSize,
+		inputChannelCount,
+		measurementChannel,
 		fetchDevices,
 		fetchAudioState,
 		setSelectedInputDevice,
@@ -78,7 +81,12 @@ export const App = () => {
 		resetAveraging,
 		clearError,
 		setFftSize,
+		setInputChannelCount,
+		setMeasurementChannel,
 	} = useAudioStore();
+
+	const selectedInputAudioDevice =
+		devices?.inputs.find((device) => device.id === selectedInputDevice) ?? null;
 
 	// Initialize on mount
 	useEffect(() => {
@@ -237,6 +245,15 @@ export const App = () => {
 									selectedDeviceId={selectedOutputDevice}
 									defaultDeviceId={devices.default_output}
 									onSelect={setSelectedOutputDevice}
+									disabled={isRunning}
+								/>
+
+								<ChannelSelector
+									inputDevice={selectedInputAudioDevice}
+									channelCount={inputChannelCount}
+									measurementChannel={measurementChannel}
+									onChannelCountChange={setInputChannelCount}
+									onMeasurementChannelChange={setMeasurementChannel}
 									disabled={isRunning}
 								/>
 

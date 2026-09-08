@@ -220,6 +220,29 @@ export const audioApi = {
 	getDiagnostics: (): Promise<Diagnosis[]> => invoke<Diagnosis[]>("get_diagnostics"),
 
 	/**
+	 * Configure how many input channels the next stream should open.
+	 * Clamped server-side to 1-8; takes effect on the next stream start.
+	 * @param count - Number of input channels to open
+	 */
+	setInputChannelCount: (count: number): Promise<void> =>
+		invoke("set_input_channel_count", { count }),
+
+	/**
+	 * Select which input channel feeds level metering and rig diagnostics.
+	 * @param index - Zero-based channel index
+	 */
+	setMeasurementChannel: (index: number): Promise<void> =>
+		invoke("set_measurement_channel", { index }),
+
+	/**
+	 * Average several measurement positions into one trace, in the complex
+	 * domain so cancellations show up rather than being averaged away.
+	 * @param traces - Transfer function data from each position, sharing one frequency axis
+	 */
+	averageTraces: (traces: TransferFunctionData[]): Promise<TransferFunctionData> =>
+		invoke<TransferFunctionData>("average_traces", { traces }),
+
+	/**
 	 * Save a measurement session as pretty-printed JSON at the given path
 	 * @param path - Filesystem path to write the session to
 	 * @param session - The session document to persist

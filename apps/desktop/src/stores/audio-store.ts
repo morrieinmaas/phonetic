@@ -30,6 +30,10 @@ interface AudioStore {
 	// FFT settings
 	fftSize: number;
 
+	// Multi-channel settings
+	inputChannelCount: number;
+	measurementChannel: number;
+
 	// Actions
 	fetchDevices: () => Promise<void>;
 	fetchAudioState: () => Promise<void>;
@@ -46,6 +50,8 @@ interface AudioStore {
 	fetchTransferFunction: () => Promise<void>;
 	resetAveraging: () => Promise<void>;
 	setFftSize: (size: number) => Promise<void>;
+	setInputChannelCount: (count: number) => Promise<void>;
+	setMeasurementChannel: (index: number) => Promise<void>;
 	clearError: () => void;
 }
 
@@ -63,6 +69,8 @@ export const useAudioStore = create<AudioStore>((set, get) => ({
 	spectrumData: [],
 	transferFunctionData: null,
 	fftSize: 2048,
+	inputChannelCount: 1,
+	measurementChannel: 0,
 
 	// Actions
 	fetchDevices: async () => {
@@ -210,6 +218,30 @@ export const useAudioStore = create<AudioStore>((set, get) => ({
 		try {
 			await audioApi.setFftSize(size);
 			set({ fftSize: size });
+		} catch (e) {
+			set({ error: e instanceof Error ? e.message : String(e) });
+		}
+	},
+
+	setInputChannelCount: async (count) => {
+		set({ error: null });
+		try {
+			await audioApi.setInputChannelCount(count);
+			const { measurementChannel } = get();
+			set({
+				inputChannelCount: count,
+				measurementChannel: Math.min(measurementChannel, count - 1),
+			});
+		} catch (e) {
+			set({ error: e instanceof Error ? e.message : String(e) });
+		}
+	},
+
+	setMeasurementChannel: async (index) => {
+		set({ error: null });
+		try {
+			await audioApi.setMeasurementChannel(index);
+			set({ measurementChannel: index });
 		} catch (e) {
 			set({ error: e instanceof Error ? e.message : String(e) });
 		}

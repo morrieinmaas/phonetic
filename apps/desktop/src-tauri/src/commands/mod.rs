@@ -218,6 +218,13 @@ pub fn set_measurement_channel(engine: State<'_, AudioEngine>, index: usize) {
     engine.set_measurement_channel(index);
 }
 
+/// Average several measurement positions into one trace, in the complex
+/// domain so cancellations show up instead of being averaged away.
+#[tauri::command]
+pub fn average_traces(traces: Vec<TransferFunctionData>) -> Result<TransferFunctionData, String> {
+    crate::dsp::average_traces(&traces)
+}
+
 // ============================================================================
 // Delay Finder Commands
 // ============================================================================
@@ -637,5 +644,23 @@ mod tests {
         assert_eq!(engine.input_channel_count(), 8, "eight is the ceiling");
         engine.set_input_channel_count(4);
         assert_eq!(engine.input_channel_count(), 4);
+    }
+
+    #[test]
+    fn average_traces_command_delegates_to_the_spatial_averaging_module() {
+        let trace = TransferFunctionData {
+            magnitude_db: vec![0.0, -3.0],
+            phase_deg: vec![0.0, 0.0],
+            coherence: vec![1.0, 1.0],
+            group_delay_ms: vec![0.0, 0.0],
+            frequencies: vec![100.0, 200.0],
+        };
+
+        let averaged = average_traces(vec![trace.clone(), trace.clone()])
+            .expect("averaging identical traces should succeed");
+        assert_eq!(averaged.magnitude_db, trace.magnitude_db);
+
+        let err = average_traces(vec![]).expect_err("averaging nothing must fail");
+        assert_eq!(err, "nothing to average");
     }
 }

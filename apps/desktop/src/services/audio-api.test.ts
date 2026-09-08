@@ -194,6 +194,44 @@ describe("audioApi", () => {
 		});
 	});
 
+	describe("setInputChannelCount", () => {
+		it("should call set_input_channel_count with the requested count", async () => {
+			mockInvoke.mockResolvedValueOnce(undefined);
+
+			await audioApi.setInputChannelCount(4);
+
+			expect(mockInvoke).toHaveBeenCalledWith("set_input_channel_count", { count: 4 });
+		});
+	});
+
+	describe("setMeasurementChannel", () => {
+		it("should call set_measurement_channel with the requested index", async () => {
+			mockInvoke.mockResolvedValueOnce(undefined);
+
+			await audioApi.setMeasurementChannel(2);
+
+			expect(mockInvoke).toHaveBeenCalledWith("set_measurement_channel", { index: 2 });
+		});
+	});
+
+	describe("averageTraces", () => {
+		it("should call average_traces with the given traces and return the result", async () => {
+			const trace = {
+				magnitude_db: [0, -3],
+				phase_deg: [0, 0],
+				coherence: [1, 1],
+				group_delay_ms: [0, 0],
+				frequencies: [100, 200],
+			};
+			mockInvoke.mockResolvedValueOnce(trace);
+
+			const result = await audioApi.averageTraces([trace, trace]);
+
+			expect(mockInvoke).toHaveBeenCalledWith("average_traces", { traces: [trace, trace] });
+			expect(result).toEqual(trace);
+		});
+	});
+
 	describe("stopStream", () => {
 		it("should call stop_audio_stream command", async () => {
 			mockInvoke.mockResolvedValueOnce(undefined);
