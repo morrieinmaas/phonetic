@@ -135,6 +135,25 @@ export type LicenseState =
 	| { state: "licensed"; key_suffix: string }
 	| { state: "expired" };
 
+/** Where a measurement pair takes its reference from. */
+export type ReferenceSource = { source: "generator" } | { source: "input"; channel: number };
+
+/** One measurement pair, matching the Rust `MeasurementPair` wire format exactly. */
+export interface MeasurementPair {
+	id: string;
+	name: string;
+	measurement_channel: number;
+	reference: ReferenceSource;
+	delay_samples: number;
+	calibration_offset_db: number;
+	enabled: boolean;
+}
+
+/** The full channel routing. */
+export interface Routing {
+	pairs: MeasurementPair[];
+}
+
 /** Settings captured alongside a saved session */
 export interface SessionSettings {
 	sample_rate: number;

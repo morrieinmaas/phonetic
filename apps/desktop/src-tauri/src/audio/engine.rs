@@ -628,7 +628,10 @@ impl AudioEngine {
     /// returns the same data there — matching `transfer_function_data_for_channel`.
     pub fn get_pair_transfer_function_by_slot(&self, slot: usize) -> TransferFunctionData {
         if self.multi_window_enabled.load(Ordering::Relaxed) {
-            return self.multi_window_processor.lock().get_data();
+            // See commit d2ac837: take the cheap stitch under the lock, release
+            // it, then do the expensive smoothing and conversion outside it.
+            let snapshot = self.multi_window_processor.lock().snapshot();
+            return snapshot.into_data();
         }
         let clamped = slot.min(self.pair_processors.len() - 1);
         self.pair_processors[clamped].lock().get_data()
@@ -798,8 +801,29 @@ impl AudioEngine {
     /// a lock held only for the pointer write — never across validation or
     /// any other work — so this can never block the real-time callback. On
     /// failure the previous routing is left untouched.
+    ///
+    /// A pair's slot is its index into `routing.pairs`, so reordering or
+    /// inserting pairs shifts later pairs onto different slots. Without
+    /// this, a pair that moves into a slot would read whatever averaged
+    /// data the slot's previous occupant left behind — under the new
+    /// pair's id — until it happens to re-average. That is the same
+    /// wrong-data-under-a-wrong-id bug fixed for concurrent processing in
+    /// commit 65ea590, here on a rarer trigger (reordering rather than two
+    /// pairs sharing a channel). Comparing pair ids slot by slot and
+    /// resetting only the slots whose occupant actually changed keeps every
+    /// other slot's averaging — and thus its data — intact.
     pub fn set_routing(&self, routing: Routing) -> Result<(), String> {
         routing.validate(MAX_INPUT_CHANNELS)?;
+
+        let previous = self.routing();
+        for slot in 0..MAX_MEASUREMENT_PAIRS {
+            let previous_id = previous.pairs.get(slot).map(|pair| pair.id.as_str());
+            let next_id = routing.pairs.get(slot).map(|pair| pair.id.as_str());
+            if previous_id != next_id {
+                self.pair_processors[slot].lock().reset_averaging();
+            }
+        }
+
         *self.routing.lock() = Arc::new(routing);
         Ok(())
     }
@@ -1690,6 +1714,120 @@ mod tests {
         assert!(
             slot1.magnitude_db.iter().any(|&db| db != -120.0),
             "pair b's own slot should have been processed"
+        );
+    }
+
+    /// Controller ruling B9. Reordering two pairs swaps which slot each
+    /// occupies; without a reset, the pair that moves into a slot would
+    /// read whatever averaged data the previous occupant left there, under
+    /// its own (wrong) id, until it re-averages.
+    #[test]
+    fn reordering_pairs_resets_the_slots_whose_occupant_changed() {
+        let fs = DEFAULT_SAMPLE_RATE;
+        let frames = FFT_SIZE * 4;
+        let tone: Vec<f32> = (0..frames)
+            .map(|i| (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / fs).sin() * 0.5)
+            .collect();
+
+        // Channel 0: the shared measurement signal. Channel 1: pair "a"'s
+        // unity-gain reference. Channel 2: pair "b"'s half-gain reference.
+        let mut interleaved = Vec::with_capacity(frames * 3);
+        for &sample in &tone {
+            interleaved.push(sample);
+            interleaved.push(sample);
+            interleaved.push(sample * 0.5);
+        }
+        let mut buffers = ChannelBuffers::new(3, frames);
+        buffers.fill(&interleaved);
+
+        let engine = AudioEngine::new();
+        let initial = Routing {
+            pairs: vec![
+                pair("a", 0, ReferenceSource::Input { channel: 1 }),
+                pair("b", 0, ReferenceSource::Input { channel: 2 }),
+            ],
+        };
+        engine.set_routing(initial.clone()).unwrap();
+
+        // Drive real, distinct data into slot 0 ("a") and slot 1 ("b")
+        // directly, bypassing the audio callback like the sibling test above.
+        process_active_pairs(&initial, &buffers, &engine.pair_processors, None);
+
+        let a_before = engine.get_pair_transfer_function_by_slot(0);
+        let b_before = engine.get_pair_transfer_function_by_slot(1);
+        assert!(
+            a_before.magnitude_db.iter().any(|&db| db != -120.0),
+            "slot 0 should hold pair a's real data before reordering"
+        );
+        assert!(
+            b_before.magnitude_db.iter().any(|&db| db != -120.0),
+            "slot 1 should hold pair b's real data before reordering"
+        );
+        assert_ne!(a_before.magnitude_db, b_before.magnitude_db);
+
+        // Reorder: "b" now occupies slot 0, "a" now occupies slot 1.
+        let reordered = Routing {
+            pairs: vec![
+                pair("b", 0, ReferenceSource::Input { channel: 2 }),
+                pair("a", 0, ReferenceSource::Input { channel: 1 }),
+            ],
+        };
+        engine.set_routing(reordered).unwrap();
+
+        let slot0_after = engine.get_pair_transfer_function_by_slot(0);
+        let slot1_after = engine.get_pair_transfer_function_by_slot(1);
+        assert!(
+            slot0_after.magnitude_db.iter().all(|&db| db == -120.0),
+            "pair b's new slot must not read pair a's leftover averaging"
+        );
+        assert!(
+            slot1_after.magnitude_db.iter().all(|&db| db == -120.0),
+            "pair a's new slot must not read pair b's leftover averaging"
+        );
+    }
+
+    /// Only the slots whose occupant actually changed are reset — a routing
+    /// update that only touches one pair must not throw away another pair's
+    /// running average.
+    #[test]
+    fn set_routing_leaves_unaffected_slots_averaging_intact() {
+        let fs = DEFAULT_SAMPLE_RATE;
+        let frames = FFT_SIZE * 4;
+        let tone: Vec<f32> = (0..frames)
+            .map(|i| (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / fs).sin() * 0.5)
+            .collect();
+
+        let mut interleaved = Vec::with_capacity(frames * 3);
+        for &sample in &tone {
+            interleaved.push(sample);
+            interleaved.push(sample);
+            interleaved.push(sample * 0.5);
+        }
+        let mut buffers = ChannelBuffers::new(3, frames);
+        buffers.fill(&interleaved);
+
+        let engine = AudioEngine::new();
+        let initial = Routing {
+            pairs: vec![
+                pair("a", 0, ReferenceSource::Input { channel: 1 }),
+                pair("b", 0, ReferenceSource::Input { channel: 2 }),
+            ],
+        };
+        engine.set_routing(initial.clone()).unwrap();
+        process_active_pairs(&initial, &buffers, &engine.pair_processors, None);
+
+        let a_before = engine.get_pair_transfer_function_by_slot(0);
+        assert!(a_before.magnitude_db.iter().any(|&db| db != -120.0));
+
+        // Same pairs, same slots, only "b" disabled — slot 0 ("a") is untouched.
+        let mut updated = initial;
+        updated.pairs[1].enabled = false;
+        engine.set_routing(updated).unwrap();
+
+        let a_after = engine.get_pair_transfer_function_by_slot(0);
+        assert_eq!(
+            a_before.magnitude_db, a_after.magnitude_db,
+            "pair a's slot kept the same id and must not have been reset"
         );
     }
 }

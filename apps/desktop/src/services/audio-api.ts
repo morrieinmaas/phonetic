@@ -9,6 +9,7 @@ import type {
 	ReferenceCurve,
 	ReferenceCurveInfo,
 	ReferenceCurveType,
+	Routing,
 	Session,
 	SignalType,
 	SmoothingFraction,
@@ -237,6 +238,26 @@ export const audioApi = {
 		invoke("set_measurement_channel", { index }),
 
 	/**
+	 * Get the current channel routing (the set of measurement pairs and what each measures against).
+	 */
+	getRouting: (): Promise<Routing> => invoke<Routing>("get_routing"),
+
+	/**
+	 * Replace the channel routing. Rejected, with the previous routing left in place, if it
+	 * fails validation (an out-of-range channel, a pair referenced to itself, a duplicate id,
+	 * or too many pairs).
+	 * @param routing - The full set of measurement pairs to apply
+	 */
+	setRouting: (routing: Routing): Promise<void> => invoke("set_routing", { routing }),
+
+	/**
+	 * Transfer function data for one measurement pair, looked up by id.
+	 * @param pairId - The measurement pair's id
+	 */
+	getPairTransferFunction: (pairId: string): Promise<TransferFunctionData> =>
+		invoke<TransferFunctionData>("get_pair_transfer_function", { pairId }),
+
+	/**
 	 * Average several measurement positions into one trace, in the complex
 	 * domain so cancellations show up rather than being averaged away.
 	 * @param traces - Transfer function data from each position, sharing one frequency axis
@@ -314,9 +335,12 @@ export type {
 	BiquadFilter,
 	FilterType,
 	LicenseState,
+	MeasurementPair,
 	ReferenceCurve,
 	ReferenceCurveInfo,
 	ReferenceCurveType,
+	ReferenceSource,
+	Routing,
 	Session,
 	SessionSettings,
 	SignalType,

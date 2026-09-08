@@ -1,4 +1,6 @@
+import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
+import { ChannelMatrix } from "./components/channel-matrix";
 import { ChannelSelector } from "./components/channel-selector";
 import { DeviceSelector } from "./components/device-selector";
 import { DiagnosticsBanner } from "./components/diagnostics-banner";
@@ -16,10 +18,21 @@ import { WebGLSpectrum } from "./components/webgl-spectrum";
 import { createPollLoop } from "./lib/poll-loop";
 import { audioApi } from "./services/audio-api";
 import { useAudioStore } from "./stores/audio-store";
-import type { LicenseState } from "./types/audio";
+import type { LicenseState, Routing } from "./types/audio";
 
 type SpectrumRenderer = "uplot" | "webgl";
-type SecondaryView = "transfer" | "spectrogram";
+type SecondaryView = "transfer" | "spectrogram" | "matrix";
+
+const SECONDARY_VIEWS: readonly SecondaryView[] = ["transfer", "spectrogram", "matrix"];
+
+/**
+ * Validates a value restored from localStorage against the current SecondaryView union.
+ * A stored value survives across app versions; without this check, a value that was valid
+ * before a view was renamed or removed would flow straight into state and leave the app
+ * with no matching content to render.
+ */
+export const isSecondaryView = (value: string | null): value is SecondaryView =>
+	value !== null && (SECONDARY_VIEWS as readonly string[]).includes(value);
 
 export const App = () => {
 	const [theme, setTheme] = useState<"dark" | "light">(() => {
@@ -42,7 +55,7 @@ export const App = () => {
 	const [secondaryView, setSecondaryView] = useState<SecondaryView>(() => {
 		if (typeof window !== "undefined") {
 			const stored = localStorage.getItem("phonetic-secondary-view");
-			if (stored === "transfer" || stored === "spectrogram") return stored;
+			if (isSecondaryView(stored)) return stored;
 		}
 		return "spectrogram";
 	});
@@ -50,6 +63,8 @@ export const App = () => {
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [licenseState, setLicenseState] = useState<LicenseState | null>(null);
 	const [permissionDialogOpen, setPermissionDialogOpen] = useState(false);
+	const [routing, setRoutingState] = useState<Routing>({ pairs: [] });
+	const [isMultiWindow, setIsMultiWindow] = useState(false);
 
 	// Animation frame ref for spectrum polling
 
@@ -122,6 +137,47 @@ export const App = () => {
 			.catch(() => setLicenseState(null));
 	}, []);
 
+	useEffect(() => {
+		audioApi
+			.getRouting()
+			.then(setRoutingState)
+			.catch(() => setRoutingState({ pairs: [] }));
+	}, []);
+
+	// Multi-window polling loop.
+	//
+	// Whether multi-window is active only needs to be known while the operator
+	// is looking at the matrix — it shares one processor across every pair
+	// (Controller ruling B8), so the matrix must know to show a paused message
+	// rather than silently repeating one trace under every pair's id.
+	useEffect(() => {
+		if (secondaryView !== "matrix") {
+			return;
+		}
+
+		return createPollLoop(
+			async () => {
+				setIsMultiWindow(await audioApi.isMultiWindow());
+			},
+			(callback) => window.setTimeout(callback, 300),
+			(handle) => window.clearTimeout(handle),
+		);
+	}, [secondaryView]);
+
+	const handleRoutingChange = async (next: Routing) => {
+		const previous = routing;
+		setRoutingState(next);
+		try {
+			await audioApi.setRouting(next);
+		} catch (e) {
+			// Rejected (e.g. failed validation) — fall back to what the engine
+			// actually holds rather than leave the UI showing a routing that
+			// was never applied.
+			setRoutingState(previous);
+			console.error("Failed to update routing:", e);
+		}
+	};
+
 	// Spectrum polling loop.
 	//
 	// Each poll must finish before the next is scheduled. Firing these without
@@ -187,6 +243,33 @@ export const App = () => {
 
 	const isRunning = audioState?.is_running ?? false;
 	const generatorActive = audioState?.generator_active ?? false;
+
+	const secondaryViewContent: Record<SecondaryView, ReactNode> = {
+		transfer: (
+			<TransferFunctionDisplay
+				data={transferFunctionData}
+				isRunning={isRunning}
+				onResetAveraging={resetAveraging}
+				sampleRate={audioState?.sample_rate ?? 48000}
+			/>
+		),
+		spectrogram: (
+			<SpectrogramDisplay
+				spectrumData={spectrumData}
+				sampleRate={audioState?.sample_rate ?? 48000}
+				fftSize={fftSize}
+				isRunning={isRunning}
+			/>
+		),
+		matrix: (
+			<ChannelMatrix
+				routing={routing}
+				channelCount={inputChannelCount}
+				onChange={handleRoutingChange}
+				isMultiWindow={isMultiWindow}
+			/>
+		),
+	};
 
 	return (
 		<div className="flex h-screen overflow-hidden flex-col bg-background text-foreground">
@@ -415,26 +498,21 @@ export const App = () => {
 									>
 										Spectrogram
 									</button>
+									<button
+										type="button"
+										onClick={() => setSecondaryView("matrix")}
+										className={`px-2 py-1 text-xs transition-colors ${
+											secondaryView === "matrix"
+												? "bg-primary text-primary-foreground"
+												: "bg-transparent text-muted-foreground hover:bg-muted"
+										}`}
+									>
+										Channel Matrix
+									</button>
 								</div>
 							</div>
 							{/* View content */}
-							<div className="flex-1 min-h-0">
-								{secondaryView === "transfer" ? (
-									<TransferFunctionDisplay
-										data={transferFunctionData}
-										isRunning={isRunning}
-										onResetAveraging={resetAveraging}
-										sampleRate={audioState?.sample_rate ?? 48000}
-									/>
-								) : (
-									<SpectrogramDisplay
-										spectrumData={spectrumData}
-										sampleRate={audioState?.sample_rate ?? 48000}
-										fftSize={fftSize}
-										isRunning={isRunning}
-									/>
-								)}
-							</div>
+							<div className="flex-1 min-h-0">{secondaryViewContent[secondaryView]}</div>
 						</div>
 					</div>
 				</main>

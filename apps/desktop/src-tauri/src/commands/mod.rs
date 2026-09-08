@@ -1,7 +1,7 @@
 use tauri::{Manager, State};
 
 use crate::audio::{
-    enumerate_devices, AudioBackend, AudioDeviceList, AudioEngine, AudioState, SignalType,
+    enumerate_devices, AudioBackend, AudioDeviceList, AudioEngine, AudioState, Routing, SignalType,
 };
 use crate::dsp::{
     diagnose, export_impulse_response_csv, export_impulse_response_json,
@@ -246,6 +246,48 @@ pub async fn set_measurement_channel(
 ) -> Result<(), String> {
     engine.set_measurement_channel(index);
     Ok(())
+}
+
+/// Current channel routing (the set of measurement pairs and what each
+/// measures against).
+#[tauri::command]
+pub async fn get_routing(engine: State<'_, AudioEngine>) -> Result<Routing, String> {
+    Ok((*engine.routing()).clone())
+}
+
+/// Replace the channel routing. Rejected (with the previous routing left in
+/// place) if it fails validation — see `Routing::validate`.
+#[tauri::command]
+pub async fn set_routing(engine: State<'_, AudioEngine>, routing: Routing) -> Result<(), String> {
+    engine.set_routing(routing)
+}
+
+/// Maps a pair id to its slot (its index into `routing.pairs`), naming the
+/// id in the error when it isn't found. Split out from the command below so
+/// it can be unit tested without a Tauri `State`.
+fn find_pair_slot(routing: &Routing, pair_id: &str) -> Result<usize, String> {
+    routing
+        .pairs
+        .iter()
+        .position(|pair| pair.id == pair_id)
+        .ok_or_else(|| format!("no measurement pair with id '{pair_id}'"))
+}
+
+/// Transfer function data for one measurement pair, looked up by id.
+///
+/// Maps the id to its slot via `routing().pairs`, so the caller never needs
+/// to know slot indices. Follows the commit d2ac837 pattern: the underlying
+/// engine call takes a cheap snapshot under its lock, releases it, then does
+/// the expensive smoothing and dB conversion outside the lock, so a UI poll
+/// can never stall the real-time audio callback.
+#[tauri::command]
+pub async fn get_pair_transfer_function(
+    engine: State<'_, AudioEngine>,
+    pair_id: String,
+) -> Result<TransferFunctionData, String> {
+    let routing = engine.routing();
+    let slot = find_pair_slot(&routing, &pair_id)?;
+    Ok(engine.get_pair_transfer_function_by_slot(slot))
 }
 
 /// Average several measurement positions into one trace, in the complex
@@ -734,5 +776,38 @@ mod tests {
         let err = tauri::async_runtime::block_on(average_traces(vec![]))
             .expect_err("averaging nothing must fail");
         assert_eq!(err, "nothing to average");
+    }
+
+    fn test_pair(id: &str, measurement_channel: usize) -> crate::audio::MeasurementPair {
+        crate::audio::MeasurementPair {
+            id: id.into(),
+            name: id.into(),
+            measurement_channel,
+            reference: crate::audio::ReferenceSource::Generator,
+            delay_samples: 0,
+            calibration_offset_db: 0.0,
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn find_pair_slot_maps_an_id_to_its_index_in_routing_pairs() {
+        let routing = Routing {
+            pairs: vec![test_pair("a", 0), test_pair("b", 1)],
+        };
+        assert_eq!(find_pair_slot(&routing, "a"), Ok(0));
+        assert_eq!(find_pair_slot(&routing, "b"), Ok(1));
+    }
+
+    #[test]
+    fn find_pair_slot_names_the_missing_id_in_its_error() {
+        let routing = Routing {
+            pairs: vec![test_pair("a", 0)],
+        };
+        let error = find_pair_slot(&routing, "does-not-exist").unwrap_err();
+        assert!(
+            error.contains("does-not-exist"),
+            "the error should name the id that wasn't found: {error}"
+        );
     }
 }

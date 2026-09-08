@@ -55,6 +55,9 @@ pub fn run() {
             commands::get_diagnostics,
             commands::set_input_channel_count,
             commands::set_measurement_channel,
+            commands::get_routing,
+            commands::set_routing,
+            commands::get_pair_transfer_function,
             commands::average_traces,
             // Delay finder commands
             commands::find_delay,
