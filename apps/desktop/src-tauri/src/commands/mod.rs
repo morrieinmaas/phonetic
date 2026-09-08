@@ -10,13 +10,13 @@ use crate::audio::{
     enumerate_devices, AudioBackend, AudioDeviceList, AudioEngine, AudioState, Routing, SignalType,
 };
 use crate::dsp::{
-    diagnose, dose, export_impulse_response_csv, export_impulse_response_json,
+    bin_frequencies, diagnose, dose, export_impulse_response_csv, export_impulse_response_json,
     export_impulse_response_txt, export_transfer_function_csv, export_transfer_function_json,
-    export_transfer_function_txt, generate_standard_frequencies, predict_with_eq, write_to_file,
-    BiquadFilter, DelayFinder, DelayResult, Diagnosis, DoseResult, ExportFormat,
-    ImpulseResponseData, ImpulseResponseProcessor, LeqLogger, LeqMetrics, LimitSet,
-    MeasurementMetadata, MicrophoneCalibration, NoiseLimit, ReferenceCurve, ReferenceCurveType,
-    SmoothingFraction, SplCalculator, TransferFunctionData,
+    export_transfer_function_txt, generate_standard_frequencies, octave_band_levels,
+    predict_with_eq, rate, write_to_file, BiquadFilter, CurveFamily, DelayFinder, DelayResult,
+    Diagnosis, DoseResult, ExportFormat, ImpulseResponseData, ImpulseResponseProcessor, LeqLogger,
+    LeqMetrics, LimitSet, MeasurementMetadata, MicrophoneCalibration, NoiseLimit, ReferenceCurve,
+    ReferenceCurveType, RoomCriteriaResult, SmoothingFraction, SplCalculator, TransferFunctionData,
 };
 use parking_lot::Mutex;
 
@@ -467,6 +467,44 @@ pub async fn get_calibration_info(
     dsp: State<'_, DspState>,
 ) -> Result<MicrophoneCalibration, String> {
     Ok(dsp.spl_calculator.lock().calibration().clone())
+}
+
+// ============================================================================
+// Room Criteria Commands
+// ============================================================================
+
+/// Rate the current calibrated spectrum against an NC/NR curve family.
+///
+/// Testable without a `State`, as the other command bodies in this module.
+fn get_room_criteria_inner(
+    engine: &AudioEngine,
+    dsp: &DspState,
+    family: CurveFamily,
+) -> Result<RoomCriteriaResult, String> {
+    let spectrum_dbfs = engine.get_spectrum_data();
+    // Derive the axis from the spectrum's own bin count, not from FFT_SIZE:
+    // set_fft_size() resizes the spectrum processor, so a hardcoded size
+    // mislabels the whole axis and puts every octave band in the wrong place.
+    let frequencies = bin_frequencies(spectrum_dbfs.len(), engine.sample_rate() as f32);
+
+    // Calibrate under the lock, then drop the guard before the octave-band
+    // summing and rating: no lock held across expensive work.
+    let spl_db = dsp
+        .spl_calculator
+        .lock()
+        .calibrate_spectrum(&spectrum_dbfs, &frequencies);
+
+    let bands = octave_band_levels(&spl_db, &frequencies);
+    Ok(rate(&bands, family))
+}
+
+#[tauri::command]
+pub async fn get_room_criteria(
+    engine: State<'_, AudioEngine>,
+    dsp: State<'_, DspState>,
+    family: CurveFamily,
+) -> Result<RoomCriteriaResult, String> {
+    get_room_criteria_inner(&engine, &dsp, family)
 }
 
 // ============================================================================
@@ -949,5 +987,13 @@ mod tests {
             limits.iter().all(|limit| !limit.source.trim().is_empty()),
             "every returned limit must be sourced"
         );
+    }
+
+    #[test]
+    fn room_criteria_command_returns_a_rating() {
+        let engine = AudioEngine::new();
+        let dsp = DspState::new();
+        let result = get_room_criteria_inner(&engine, &dsp, CurveFamily::Nc);
+        assert!(result.is_ok(), "{result:?}");
     }
 }

@@ -10,6 +10,7 @@ import { LeqPanel } from "./components/leq-panel";
 import type { LeqPanelMetrics } from "./components/leq-panel";
 import { LicenseDialog, shouldBlockUsage } from "./components/license-dialog";
 import { PermissionDialog } from "./components/permission-dialog";
+import { RoomCriteriaPanel } from "./components/room-criteria-panel";
 import { SessionControls } from "./components/session-controls";
 import { SettingsDialog } from "./components/settings-dialog";
 import { SpectrogramDisplay } from "./components/spectrogram-display";
@@ -21,12 +22,25 @@ import { WebGLSpectrum } from "./components/webgl-spectrum";
 import { createPollLoop } from "./lib/poll-loop";
 import { audioApi } from "./services/audio-api";
 import { useAudioStore } from "./stores/audio-store";
-import type { DoseResult, LicenseState, NoiseLimit, Routing } from "./types/audio";
+import type {
+	CurveFamily,
+	DoseResult,
+	LicenseState,
+	NoiseLimit,
+	RoomCriteriaResult,
+	Routing,
+} from "./types/audio";
 
 type SpectrumRenderer = "uplot" | "webgl";
-type SecondaryView = "transfer" | "spectrogram" | "matrix" | "leq";
+type SecondaryView = "transfer" | "spectrogram" | "matrix" | "leq" | "room";
 
-const SECONDARY_VIEWS: readonly SecondaryView[] = ["transfer", "spectrogram", "matrix", "leq"];
+const SECONDARY_VIEWS: readonly SecondaryView[] = [
+	"transfer",
+	"spectrogram",
+	"matrix",
+	"leq",
+	"room",
+];
 
 /** How often a completed LEQ interval is appended to the log, in seconds. */
 const LEQ_LOG_INTERVAL_SECONDS = 60;
@@ -82,6 +96,8 @@ export const App = () => {
 	const [leqDose, setLeqDose] = useState<DoseResult | null>(null);
 	const [leqLogging, setLeqLogging] = useState(false);
 	const [leqLoggingPath, setLeqLoggingPath] = useState<string | null>(null);
+	const [roomCriteriaFamily, setRoomCriteriaFamily] = useState<CurveFamily>("nc");
+	const [roomCriteriaResult, setRoomCriteriaResult] = useState<RoomCriteriaResult | null>(null);
 
 	// Animation frame ref for spectrum polling
 
@@ -284,6 +300,27 @@ export const App = () => {
 		);
 	}, [audioState?.is_running, fetchSpectrum, fetchTransferFunction]);
 
+	// Room criteria polling loop.
+	//
+	// A rating only needs to refresh a few times a second, not once a frame, and
+	// only while the operator is actually looking at this view — polling a
+	// hidden panel just stacks up IPC round-trips nobody reads.
+	useEffect(() => {
+		const isRunning = audioState?.is_running ?? false;
+		if (secondaryView !== "room" || !isRunning) {
+			return;
+		}
+
+		return createPollLoop(
+			async () => {
+				const result = await audioApi.getRoomCriteria(roomCriteriaFamily);
+				setRoomCriteriaResult(result);
+			},
+			(callback) => window.setTimeout(callback, 300),
+			(handle) => window.clearTimeout(handle),
+		);
+	}, [secondaryView, audioState?.is_running, roomCriteriaFamily]);
+
 	const toggleTheme = () => {
 		setTheme((prev) => (prev === "dark" ? "light" : "dark"));
 	};
@@ -366,6 +403,7 @@ export const App = () => {
 				onStopLogging={handleStopLeqLogging}
 			/>
 		),
+		room: <RoomCriteriaPanel result={roomCriteriaResult} onFamilyChange={setRoomCriteriaFamily} />,
 	};
 
 	return (
@@ -616,6 +654,17 @@ export const App = () => {
 										}`}
 									>
 										Noise Dose
+									</button>
+									<button
+										type="button"
+										onClick={() => setSecondaryView("room")}
+										className={`px-2 py-1 text-xs transition-colors ${
+											secondaryView === "room"
+												? "bg-primary text-primary-foreground"
+												: "bg-transparent text-muted-foreground hover:bg-muted"
+										}`}
+									>
+										Room Criteria
 									</button>
 								</div>
 							</div>

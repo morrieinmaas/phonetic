@@ -149,6 +149,11 @@ test-leq:
     cargo test --manifest-path {{tauri}}/Cargo.toml noise_limits
     cd {{desktop}} && bun test src/components/leq-panel.test.tsx
 
+# Run the room criteria tests (Rust + TS)
+test-room-criteria:
+    cargo test --manifest-path {{tauri}}/Cargo.toml room_criteria
+    cd {{desktop}} && bun test src/components/room-criteria-panel.test.tsx
+
 # Run all tests
 test: test-ts test-rust
 

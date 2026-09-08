@@ -101,6 +101,25 @@ impl FftProcessor {
     }
 }
 
+/// Frequencies of the bins returned by a real FFT, derived from the bin count
+/// itself rather than from a separately-read FFT size.
+///
+/// A real FFT of N samples yields N/2+1 bins, so the count determines N. Taking
+/// it from the data means the axis can never disagree with the spectrum it
+/// labels. Reading the size and the data as two separate lock acquisitions can
+/// straddle a concurrent `set_fft_size`, and a mislabelled frequency axis is the
+/// kind of confidently wrong number this project has shipped before.
+pub fn bin_frequencies(bin_count: usize, sample_rate: f32) -> Vec<f32> {
+    if bin_count < 2 {
+        return vec![0.0; bin_count];
+    }
+
+    let fft_size = (bin_count - 1) * 2;
+    (0..bin_count)
+        .map(|i| i as f32 * sample_rate / fft_size as f32)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -358,5 +377,40 @@ mod tests {
         let processor = FftProcessor::new(16384);
         assert_eq!(processor.fft_size(), 16384);
         assert_eq!(processor.bin_count(), 8193);
+    }
+
+    #[test]
+    fn bin_frequencies_start_at_dc_and_end_at_nyquist() {
+        let f = bin_frequencies(1025, 48_000.0);
+        assert_eq!(f.len(), 1025);
+        assert_eq!(f[0], 0.0);
+        assert!((f[1024] - 24_000.0).abs() < 0.01, "last bin {}", f[1024]);
+    }
+
+    /// The axis must end at Nyquist whatever the FFT size. Reconstructing it
+    /// from a hardcoded 2048 put the last bin of a 4096-point spectrum at
+    /// 48 kHz — twice Nyquist — and every octave band in the wrong place.
+    #[test]
+    fn bin_frequencies_end_at_nyquist_for_every_fft_size() {
+        for bins in [513usize, 1025, 2049, 4097] {
+            let f = bin_frequencies(bins, 48_000.0);
+            let last = f[bins - 1];
+            assert!(
+                (last - 24_000.0).abs() < 0.01,
+                "{bins} bins ended at {last} Hz, not Nyquist"
+            );
+        }
+    }
+
+    #[test]
+    fn bin_frequencies_track_the_sample_rate() {
+        let f = bin_frequencies(1025, 44_100.0);
+        assert!((f[1024] - 22_050.0).abs() < 0.01, "last bin {}", f[1024]);
+    }
+
+    #[test]
+    fn bin_frequencies_handle_degenerate_counts() {
+        assert!(bin_frequencies(0, 48_000.0).is_empty());
+        assert_eq!(bin_frequencies(1, 48_000.0), vec![0.0]);
     }
 }
