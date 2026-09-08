@@ -51,17 +51,17 @@ impl Default for DspState {
 }
 
 #[tauri::command]
-pub fn list_audio_devices() -> AudioDeviceList {
-    enumerate_devices()
+pub async fn list_audio_devices() -> Result<AudioDeviceList, String> {
+    Ok(enumerate_devices())
 }
 
 #[tauri::command]
-pub fn get_audio_state(engine: State<'_, AudioEngine>) -> AudioState {
-    engine.get_state()
+pub async fn get_audio_state(engine: State<'_, AudioEngine>) -> Result<AudioState, String> {
+    Ok(engine.get_state())
 }
 
 #[tauri::command]
-pub fn set_audio_backend(
+pub async fn set_audio_backend(
     engine: State<'_, AudioEngine>,
     backend: AudioBackend,
 ) -> Result<(), String> {
@@ -69,17 +69,21 @@ pub fn set_audio_backend(
 }
 
 #[tauri::command]
-pub fn set_exclusive_mode(engine: State<'_, AudioEngine>, enabled: bool) {
-    engine.set_exclusive_mode(enabled)
+pub async fn set_exclusive_mode(
+    engine: State<'_, AudioEngine>,
+    enabled: bool,
+) -> Result<(), String> {
+    engine.set_exclusive_mode(enabled);
+    Ok(())
 }
 
 #[tauri::command]
-pub fn get_exclusive_mode(engine: State<'_, AudioEngine>) -> bool {
-    engine.get_exclusive_mode()
+pub async fn get_exclusive_mode(engine: State<'_, AudioEngine>) -> Result<bool, String> {
+    Ok(engine.get_exclusive_mode())
 }
 
 #[tauri::command]
-pub fn start_audio_stream(
+pub async fn start_audio_stream(
     engine: State<'_, AudioEngine>,
     input_device_id: Option<String>,
     output_device_id: Option<String>,
@@ -100,12 +104,13 @@ pub fn start_audio_stream(
 }
 
 #[tauri::command]
-pub fn stop_audio_stream(engine: State<'_, AudioEngine>) {
-    engine.stop_stream()
+pub async fn stop_audio_stream(engine: State<'_, AudioEngine>) -> Result<(), String> {
+    engine.stop_stream();
+    Ok(())
 }
 
 #[tauri::command]
-pub fn start_generator(
+pub async fn start_generator(
     engine: State<'_, AudioEngine>,
     signal_type: SignalType,
     frequency: f64,
@@ -138,27 +143,31 @@ pub fn start_generator(
 }
 
 #[tauri::command]
-pub fn stop_generator(engine: State<'_, AudioEngine>) {
-    engine.stop_generator()
+pub async fn stop_generator(engine: State<'_, AudioEngine>) -> Result<(), String> {
+    engine.stop_generator();
+    Ok(())
 }
 
 #[tauri::command]
-pub fn get_spectrum_data(engine: State<'_, AudioEngine>) -> Vec<f32> {
-    engine.get_spectrum_data()
+pub async fn get_spectrum_data(engine: State<'_, AudioEngine>) -> Result<Vec<f32>, String> {
+    Ok(engine.get_spectrum_data())
 }
 
 #[tauri::command]
-pub fn get_transfer_function_data(engine: State<'_, AudioEngine>) -> TransferFunctionData {
-    engine.get_transfer_function_data()
+pub async fn get_transfer_function_data(
+    engine: State<'_, AudioEngine>,
+) -> Result<TransferFunctionData, String> {
+    Ok(engine.get_transfer_function_data())
 }
 
 #[tauri::command]
-pub fn reset_averaging(engine: State<'_, AudioEngine>) {
-    engine.reset_averaging()
+pub async fn reset_averaging(engine: State<'_, AudioEngine>) -> Result<(), String> {
+    engine.reset_averaging();
+    Ok(())
 }
 
 #[tauri::command]
-pub fn set_fft_size(engine: State<'_, AudioEngine>, size: usize) -> Result<(), String> {
+pub async fn set_fft_size(engine: State<'_, AudioEngine>, size: usize) -> Result<(), String> {
     // Validate FFT size
     if !size.is_power_of_two() {
         return Err("FFT size must be a power of 2".to_string());
@@ -171,57 +180,80 @@ pub fn set_fft_size(engine: State<'_, AudioEngine>, size: usize) -> Result<(), S
 }
 
 #[tauri::command]
-pub fn set_transfer_function_delay(engine: State<'_, AudioEngine>, delay_samples: usize) {
+pub async fn set_transfer_function_delay(
+    engine: State<'_, AudioEngine>,
+    delay_samples: usize,
+) -> Result<(), String> {
     engine.set_transfer_function_delay(delay_samples);
+    Ok(())
 }
 
 #[tauri::command]
-pub fn get_transfer_function_delay(engine: State<'_, AudioEngine>) -> usize {
-    engine.transfer_function_delay()
+pub async fn get_transfer_function_delay(engine: State<'_, AudioEngine>) -> Result<usize, String> {
+    Ok(engine.transfer_function_delay())
 }
 
 #[tauri::command]
-pub fn set_max_averages(engine: State<'_, AudioEngine>, count: usize) {
+pub async fn set_max_averages(engine: State<'_, AudioEngine>, count: usize) -> Result<(), String> {
     engine.set_max_averages(count);
+    Ok(())
 }
 
 #[tauri::command]
-pub fn set_resolution_mode(engine: State<'_, AudioEngine>, multi_window: bool) {
+pub async fn set_resolution_mode(
+    engine: State<'_, AudioEngine>,
+    multi_window: bool,
+) -> Result<(), String> {
     engine.set_resolution_mode(multi_window);
+    Ok(())
 }
 
 #[tauri::command]
-pub fn is_multi_window(engine: State<'_, AudioEngine>) -> bool {
-    engine.is_multi_window()
+pub async fn is_multi_window(engine: State<'_, AudioEngine>) -> Result<bool, String> {
+    Ok(engine.is_multi_window())
 }
 
 #[tauri::command]
-pub fn set_smoothing(engine: State<'_, AudioEngine>, fraction: SmoothingFraction) {
+pub async fn set_smoothing(
+    engine: State<'_, AudioEngine>,
+    fraction: SmoothingFraction,
+) -> Result<(), String> {
     engine.set_smoothing(fraction);
+    Ok(())
 }
 
 #[tauri::command]
-pub fn get_diagnostics(engine: State<'_, AudioEngine>) -> Vec<Diagnosis> {
-    diagnose(&engine.rig_snapshot())
+pub async fn get_diagnostics(engine: State<'_, AudioEngine>) -> Result<Vec<Diagnosis>, String> {
+    Ok(diagnose(&engine.rig_snapshot()))
 }
 
 /// Configure how many input channels the next stream should open, clamped to
 /// 1-8. Real system tuning uses several mics at once.
 #[tauri::command]
-pub fn set_input_channel_count(engine: State<'_, AudioEngine>, count: usize) {
+pub async fn set_input_channel_count(
+    engine: State<'_, AudioEngine>,
+    count: usize,
+) -> Result<(), String> {
     engine.set_input_channel_count(count);
+    Ok(())
 }
 
 /// Select which input channel feeds level metering and rig diagnostics.
 #[tauri::command]
-pub fn set_measurement_channel(engine: State<'_, AudioEngine>, index: usize) {
+pub async fn set_measurement_channel(
+    engine: State<'_, AudioEngine>,
+    index: usize,
+) -> Result<(), String> {
     engine.set_measurement_channel(index);
+    Ok(())
 }
 
 /// Average several measurement positions into one trace, in the complex
 /// domain so cancellations show up instead of being averaged away.
 #[tauri::command]
-pub fn average_traces(traces: Vec<TransferFunctionData>) -> Result<TransferFunctionData, String> {
+pub async fn average_traces(
+    traces: Vec<TransferFunctionData>,
+) -> Result<TransferFunctionData, String> {
     crate::dsp::average_traces(&traces)
 }
 
@@ -230,25 +262,33 @@ pub fn average_traces(traces: Vec<TransferFunctionData>) -> Result<TransferFunct
 // ============================================================================
 
 #[tauri::command]
-pub fn find_delay(
+pub async fn find_delay(
     dsp: State<'_, DspState>,
     engine: State<'_, AudioEngine>,
     reference: Vec<f32>,
     measured: Vec<f32>,
-) -> DelayResult {
+) -> Result<DelayResult, String> {
     let result = dsp.delay_finder.lock().find_delay(&reference, &measured);
     engine.push_measured_delay(result.delay_samples);
-    result
+    Ok(result)
 }
 
 #[tauri::command]
-pub fn set_delay_finder_max_delay(dsp: State<'_, DspState>, max_delay_ms: f32) {
+pub async fn set_delay_finder_max_delay(
+    dsp: State<'_, DspState>,
+    max_delay_ms: f32,
+) -> Result<(), String> {
     dsp.delay_finder.lock().set_max_delay_ms(max_delay_ms);
+    Ok(())
 }
 
 #[tauri::command]
-pub fn set_delay_finder_threshold(dsp: State<'_, DspState>, threshold: f32) {
+pub async fn set_delay_finder_threshold(
+    dsp: State<'_, DspState>,
+    threshold: f32,
+) -> Result<(), String> {
     dsp.delay_finder.lock().set_correlation_threshold(threshold);
+    Ok(())
 }
 
 // ============================================================================
@@ -256,40 +296,49 @@ pub fn set_delay_finder_threshold(dsp: State<'_, DspState>, threshold: f32) {
 // ============================================================================
 
 #[tauri::command]
-pub fn start_impulse_capture(dsp: State<'_, DspState>) {
+pub async fn start_impulse_capture(dsp: State<'_, DspState>) -> Result<(), String> {
     dsp.impulse_response.lock().start_capture();
+    Ok(())
 }
 
 #[tauri::command]
-pub fn stop_impulse_capture(dsp: State<'_, DspState>) -> bool {
-    dsp.impulse_response.lock().stop_capture()
+pub async fn stop_impulse_capture(dsp: State<'_, DspState>) -> Result<bool, String> {
+    Ok(dsp.impulse_response.lock().stop_capture())
 }
 
 #[tauri::command]
-pub fn add_impulse_samples(dsp: State<'_, DspState>, reference: Vec<f32>, measured: Vec<f32>) {
+pub async fn add_impulse_samples(
+    dsp: State<'_, DspState>,
+    reference: Vec<f32>,
+    measured: Vec<f32>,
+) -> Result<(), String> {
     dsp.impulse_response
         .lock()
         .add_samples(&reference, &measured);
+    Ok(())
 }
 
 #[tauri::command]
-pub fn get_impulse_capture_progress(dsp: State<'_, DspState>) -> f32 {
-    dsp.impulse_response.lock().capture_progress()
+pub async fn get_impulse_capture_progress(dsp: State<'_, DspState>) -> Result<f32, String> {
+    Ok(dsp.impulse_response.lock().capture_progress())
 }
 
 #[tauri::command]
-pub fn is_impulse_capture_complete(dsp: State<'_, DspState>) -> bool {
-    dsp.impulse_response.lock().is_capture_complete()
+pub async fn is_impulse_capture_complete(dsp: State<'_, DspState>) -> Result<bool, String> {
+    Ok(dsp.impulse_response.lock().is_capture_complete())
 }
 
 #[tauri::command]
-pub fn compute_impulse_response(dsp: State<'_, DspState>) -> Option<ImpulseResponseData> {
-    dsp.impulse_response.lock().compute_impulse_response()
+pub async fn compute_impulse_response(
+    dsp: State<'_, DspState>,
+) -> Result<Option<ImpulseResponseData>, String> {
+    Ok(dsp.impulse_response.lock().compute_impulse_response())
 }
 
 #[tauri::command]
-pub fn clear_impulse_capture(dsp: State<'_, DspState>) {
+pub async fn clear_impulse_capture(dsp: State<'_, DspState>) -> Result<(), String> {
     dsp.impulse_response.lock().clear();
+    Ok(())
 }
 
 // ============================================================================
@@ -297,7 +346,7 @@ pub fn clear_impulse_capture(dsp: State<'_, DspState>) {
 // ============================================================================
 
 #[tauri::command]
-pub fn load_calibration_file(
+pub async fn load_calibration_file(
     dsp: State<'_, DspState>,
     content: String,
     name: String,
@@ -308,42 +357,51 @@ pub fn load_calibration_file(
 }
 
 #[tauri::command]
-pub fn set_calibration_sensitivity(dsp: State<'_, DspState>, sensitivity_db: f32) {
+pub async fn set_calibration_sensitivity(
+    dsp: State<'_, DspState>,
+    sensitivity_db: f32,
+) -> Result<(), String> {
     let mut calc = dsp.spl_calculator.lock();
     let mut cal = calc.calibration().clone();
     cal.sensitivity_db = sensitivity_db;
     calc.set_calibration(cal);
+    Ok(())
 }
 
 #[tauri::command]
-pub fn set_preamp_gain(dsp: State<'_, DspState>, gain_db: f32) {
+pub async fn set_preamp_gain(dsp: State<'_, DspState>, gain_db: f32) -> Result<(), String> {
     dsp.spl_calculator.lock().set_preamp_gain(gain_db);
+    Ok(())
 }
 
 #[tauri::command]
-pub fn set_a_weighting(dsp: State<'_, DspState>, enabled: bool) {
+pub async fn set_a_weighting(dsp: State<'_, DspState>, enabled: bool) -> Result<(), String> {
     dsp.spl_calculator.lock().set_a_weighting(enabled);
+    Ok(())
 }
 
 #[tauri::command]
-pub fn dbfs_to_spl(dsp: State<'_, DspState>, dbfs: f32) -> f32 {
-    dsp.spl_calculator.lock().dbfs_to_spl(dbfs)
+pub async fn dbfs_to_spl(dsp: State<'_, DspState>, dbfs: f32) -> Result<f32, String> {
+    Ok(dsp.spl_calculator.lock().dbfs_to_spl(dbfs))
 }
 
 #[tauri::command]
-pub fn calibrate_with_reference(
+pub async fn calibrate_with_reference(
     dsp: State<'_, DspState>,
     measured_dbfs: f32,
     reference_spl_db: f32,
-) {
+) -> Result<(), String> {
     dsp.spl_calculator
         .lock()
         .calibrate_with_reference(measured_dbfs, reference_spl_db);
+    Ok(())
 }
 
 #[tauri::command]
-pub fn get_calibration_info(dsp: State<'_, DspState>) -> MicrophoneCalibration {
-    dsp.spl_calculator.lock().calibration().clone()
+pub async fn get_calibration_info(
+    dsp: State<'_, DspState>,
+) -> Result<MicrophoneCalibration, String> {
+    Ok(dsp.spl_calculator.lock().calibration().clone())
 }
 
 // ============================================================================
@@ -351,7 +409,7 @@ pub fn get_calibration_info(dsp: State<'_, DspState>) -> MicrophoneCalibration {
 // ============================================================================
 
 #[tauri::command]
-pub fn export_transfer_function(
+pub async fn export_transfer_function(
     engine: State<'_, AudioEngine>,
     format: ExportFormat,
     file_path: String,
@@ -380,7 +438,7 @@ pub fn export_transfer_function(
 }
 
 #[tauri::command]
-pub fn export_impulse_response(
+pub async fn export_impulse_response(
     dsp: State<'_, DspState>,
     format: ExportFormat,
     file_path: String,
@@ -423,8 +481,8 @@ pub struct ReferenceCurveInfo {
 }
 
 #[tauri::command]
-pub fn get_available_reference_curves() -> Vec<ReferenceCurveInfo> {
-    ReferenceCurveType::all()
+pub async fn get_available_reference_curves() -> Result<Vec<ReferenceCurveInfo>, String> {
+    Ok(ReferenceCurveType::all()
         .into_iter()
         .map(|ct| ReferenceCurveInfo {
             curve_type: ct,
@@ -446,25 +504,28 @@ pub fn get_available_reference_curves() -> Vec<ReferenceCurveInfo> {
                 ReferenceCurveType::CWeighting => "C-weighting frequency response".to_string(),
             },
         })
-        .collect()
+        .collect())
 }
 
 #[tauri::command]
-pub fn get_reference_curve(curve_type: ReferenceCurveType, num_points: usize) -> ReferenceCurve {
+pub async fn get_reference_curve(
+    curve_type: ReferenceCurveType,
+    num_points: usize,
+) -> Result<ReferenceCurve, String> {
     let frequencies = generate_standard_frequencies(num_points.clamp(10, 1024));
-    ReferenceCurve::generate(curve_type, &frequencies)
+    Ok(ReferenceCurve::generate(curve_type, &frequencies))
 }
 
 #[tauri::command]
-pub fn get_reference_curve_at_frequencies(
+pub async fn get_reference_curve_at_frequencies(
     curve_type: ReferenceCurveType,
     frequencies: Vec<f64>,
-) -> ReferenceCurve {
-    ReferenceCurve::generate(curve_type, &frequencies)
+) -> Result<ReferenceCurve, String> {
+    Ok(ReferenceCurve::generate(curve_type, &frequencies))
 }
 
 #[tauri::command]
-pub fn measure_wav_file(
+pub async fn measure_wav_file(
     path: String,
     reference_channel: usize,
     measurement_channel: usize,
@@ -473,16 +534,18 @@ pub fn measure_wav_file(
 }
 
 #[tauri::command]
-pub fn predict_eq(
+pub async fn predict_eq(
     trace: TransferFunctionData,
     filters: Vec<BiquadFilter>,
     sample_rate: f32,
-) -> TransferFunctionData {
-    predict_with_eq(&trace, &filters, sample_rate)
+) -> Result<TransferFunctionData, String> {
+    Ok(predict_with_eq(&trace, &filters, sample_rate))
 }
 
 #[tauri::command]
-pub fn get_license_state(app: tauri::AppHandle) -> Result<crate::licensing::LicenseState, String> {
+pub async fn get_license_state(
+    app: tauri::AppHandle,
+) -> Result<crate::licensing::LicenseState, String> {
     let dir = app
         .path()
         .app_data_dir()
@@ -497,7 +560,7 @@ pub fn get_license_state(app: tauri::AppHandle) -> Result<crate::licensing::Lice
 }
 
 #[tauri::command]
-pub fn activate_license(
+pub async fn activate_license(
     app: tauri::AppHandle,
     key: String,
 ) -> Result<crate::licensing::LicenseState, String> {
@@ -522,12 +585,12 @@ pub fn activate_license(
 }
 
 #[tauri::command]
-pub fn save_session(path: String, session: crate::session::Session) -> Result<(), String> {
+pub async fn save_session(path: String, session: crate::session::Session) -> Result<(), String> {
     crate::session::save_session_to_path(&path, &session)
 }
 
 #[tauri::command]
-pub fn load_session(path: String) -> Result<crate::session::Session, String> {
+pub async fn load_session(path: String) -> Result<crate::session::Session, String> {
     crate::session::load_session_from_path(&path)
 }
 
@@ -624,8 +687,10 @@ mod tests {
             traces: vec![],
         };
 
-        save_session(path.clone(), session).expect("save_session should succeed");
-        let loaded = load_session(path.clone()).expect("load_session should succeed");
+        tauri::async_runtime::block_on(save_session(path.clone(), session))
+            .expect("save_session should succeed");
+        let loaded = tauri::async_runtime::block_on(load_session(path.clone()))
+            .expect("load_session should succeed");
         assert_eq!(loaded.name, "Command roundtrip");
 
         std::fs::remove_file(&path).ok();
@@ -656,11 +721,13 @@ mod tests {
             frequencies: vec![100.0, 200.0],
         };
 
-        let averaged = average_traces(vec![trace.clone(), trace.clone()])
-            .expect("averaging identical traces should succeed");
+        let averaged =
+            tauri::async_runtime::block_on(average_traces(vec![trace.clone(), trace.clone()]))
+                .expect("averaging identical traces should succeed");
         assert_eq!(averaged.magnitude_db, trace.magnitude_db);
 
-        let err = average_traces(vec![]).expect_err("averaging nothing must fail");
+        let err = tauri::async_runtime::block_on(average_traces(vec![]))
+            .expect_err("averaging nothing must fail");
         assert_eq!(err, "nothing to average");
     }
 }
