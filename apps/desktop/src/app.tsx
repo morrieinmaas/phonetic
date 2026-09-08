@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { DeviceSelector } from "./components/device-selector";
 import { DiagnosticsBanner } from "./components/diagnostics-banner";
 import { GeneratorControls } from "./components/generator-controls";
@@ -11,6 +11,7 @@ import { StatusBar } from "./components/status-bar";
 import { TransferFunctionDisplay } from "./components/transfer-function-display";
 import { ThemeToggle } from "./components/ui/theme-toggle";
 import { WebGLSpectrum } from "./components/webgl-spectrum";
+import { createPollLoop } from "./lib/poll-loop";
 import { useAudioStore } from "./stores/audio-store";
 
 type SpectrumRenderer = "uplot" | "webgl";
@@ -46,7 +47,6 @@ export const App = () => {
 	const [permissionDialogOpen, setPermissionDialogOpen] = useState(false);
 
 	// Animation frame ref for spectrum polling
-	const animationFrameRef = useRef<number | null>(null);
 
 	// Get store state and actions
 	const {
@@ -103,28 +103,26 @@ export const App = () => {
 		localStorage.setItem("phonetic-secondary-view", secondaryView);
 	}, [secondaryView]);
 
-	// Spectrum polling loop
+	// Spectrum polling loop.
+	//
+	// Each poll must finish before the next is scheduled. Firing these without
+	// awaiting them queues a fresh pair of IPC calls every frame; once the
+	// backend takes longer than the frame budget — which it does as soon as the
+	// generator starts and the audio callback begins real FFT work under the
+	// same lock — the queue grows without bound and the window freezes.
 	useEffect(() => {
 		const isRunning = audioState?.is_running ?? false;
-
-		const pollSpectrumData = () => {
-			if (isRunning) {
-				fetchSpectrum();
-				fetchTransferFunction();
-			}
-			animationFrameRef.current = requestAnimationFrame(pollSpectrumData);
-		};
-
-		if (isRunning) {
-			animationFrameRef.current = requestAnimationFrame(pollSpectrumData);
+		if (!isRunning) {
+			return;
 		}
 
-		return () => {
-			if (animationFrameRef.current !== null) {
-				cancelAnimationFrame(animationFrameRef.current);
-				animationFrameRef.current = null;
-			}
-		};
+		return createPollLoop(
+			async () => {
+				await Promise.all([fetchSpectrum(), fetchTransferFunction()]);
+			},
+			(callback) => requestAnimationFrame(callback),
+			(handle) => cancelAnimationFrame(handle),
+		);
 	}, [audioState?.is_running, fetchSpectrum, fetchTransferFunction]);
 
 	const toggleTheme = () => {
