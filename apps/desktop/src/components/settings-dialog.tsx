@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { binCount, windowLengthMs } from "../lib/fft-window";
 import { type AudioState, audioApi } from "../services/audio-api";
 import type { SmoothingFraction } from "../types/audio";
 
@@ -109,7 +110,7 @@ export const SettingsDialog = ({
 	const availableBackends = audioState?.backend_available ?? ["cpal"];
 
 	return (
-		<div className="fixed inset-0 z-50 flex items-center justify-center">
+		<div className="fixed inset-0 z-50 flex items-center justify-center p-4">
 			{/* Backdrop */}
 			<div
 				className="absolute inset-0 bg-black/50 backdrop-blur-sm"
@@ -123,10 +124,10 @@ export const SettingsDialog = ({
 			{/* Dialog */}
 			<div
 				data-testid="settings-dialog"
-				className="relative glass rounded-lg border border-border shadow-xl w-full max-w-md mx-4"
+				className="relative glass rounded-lg border border-border shadow-xl w-full max-w-md flex flex-col max-h-full"
 			>
 				{/* Header */}
-				<div className="flex items-center justify-between p-4 border-b border-border">
+				<div className="flex flex-shrink-0 items-center justify-between p-4 border-b border-border">
 					<h2 className="text-lg font-semibold">Settings</h2>
 					<button
 						type="button"
@@ -152,8 +153,9 @@ export const SettingsDialog = ({
 					</button>
 				</div>
 
-				{/* Content */}
-				<div className="p-4 space-y-6">
+				{/* Content: the only scrolling region, so header and footer stay reachable
+				    however short the display is */}
+				<div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-6">
 					{/* Audio Backend */}
 					<fieldset className="space-y-2">
 						<legend className="text-sm font-medium text-foreground">Audio Backend</legend>
@@ -232,9 +234,12 @@ export const SettingsDialog = ({
 						<legend className="text-sm font-medium text-foreground">FFT Size</legend>
 						<p className="text-xs text-muted-foreground mb-2">
 							Larger = better frequency resolution, slower updates. Current:{" "}
-							<span data-testid="fft-size-current">{selectedFftSize}</span> bins (
-							{audioState ? ((audioState.sample_rate / selectedFftSize) * 1000).toFixed(1) : "?"} ms
-							window)
+							<span data-testid="fft-size-current">{selectedFftSize}</span>-point window,{" "}
+							{binCount(selectedFftSize)} bins (
+							{audioState
+								? windowLengthMs(selectedFftSize, audioState.sample_rate).toFixed(1)
+								: "?"}{" "}
+							ms)
 						</p>
 						<div data-testid="fft-size-select" className="grid grid-cols-3 gap-2">
 							{FFT_SIZES.map((size) => (
@@ -365,7 +370,7 @@ export const SettingsDialog = ({
 				</div>
 
 				{/* Footer */}
-				<div className="flex justify-end p-4 border-t border-border">
+				<div className="flex flex-shrink-0 justify-end p-4 border-t border-border">
 					<button
 						type="button"
 						onClick={onClose}
