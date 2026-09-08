@@ -377,6 +377,7 @@ export const App = () => {
 									data={transferFunctionData}
 									isRunning={isRunning}
 									onResetAveraging={resetAveraging}
+									sampleRate={audioState?.sample_rate ?? 48000}
 								/>
 							) : (
 								<SpectrogramDisplay
