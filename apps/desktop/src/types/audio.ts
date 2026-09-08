@@ -175,9 +175,13 @@ export interface Session {
 
 /**
  * LEQ/LAeq/LCeq/peak reading, integrated since the stream last (re)started.
- * All values are dBFS, matching the Rust `LeqMetrics` wire format exactly --
- * they need the app's own SPL calibration (see `compute_leq_dose`) to become
- * an absolute SPL number.
+ * Matches the Rust `LeqMetrics` wire format exactly.
+ *
+ * Values arriving over `get_leq_metrics` are calibrated **dB SPL**, converted
+ * from the meter's raw dBFS by the command using the app's live SplCalculator.
+ * That conversion is not cosmetic: these numbers are rendered beside an
+ * absolute noise limit, and raw dBFS next to an 85 dB limit reads as huge
+ * headroom when the rig may be well over it.
  */
 export interface LeqMetrics {
 	leq_db: number;

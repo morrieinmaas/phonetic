@@ -704,8 +704,15 @@ pub async fn load_session(path: String) -> Result<crate::session::Session, Strin
 /// Current LAeq/LCeq/LAFmax/LApeak/LCpeak/elapsed reading, integrated since
 /// the stream last (re)started -- see `AudioEngine::leq_metrics`.
 #[tauri::command]
-pub async fn get_leq_metrics(engine: State<'_, AudioEngine>) -> Result<LeqMetrics, String> {
-    Ok(engine.leq_metrics())
+pub async fn get_leq_metrics(
+    engine: State<'_, AudioEngine>,
+    dsp: State<'_, DspState>,
+) -> Result<LeqMetrics, String> {
+    // Converted to SPL here, not in the panel: these numbers are rendered
+    // directly beside an absolute noise limit, and dBFS beside 85 dB SPL reads
+    // as enormous headroom when the rig may be well over it.
+    let spl = dsp.spl_calculator.lock();
+    Ok(engine.leq_metrics().to_spl(&spl))
 }
 
 /// The shipped noise-exposure limit presets, each sourced and dated (see

@@ -348,6 +348,29 @@ pub struct LeqMeter {
     sample_count: u64,
 }
 
+impl LeqMetrics {
+    /// Convert every level in this reading from dBFS to calibrated dB SPL.
+    ///
+    /// `LeqMeter` integrates raw digital samples, so its levels are dBFS —
+    /// negative, and meaningless next to an absolute limit. The display and
+    /// the dose comparison both need SPL. Showing dBFS beside an 85 dB SPL
+    /// limit reads as ~105 dB of headroom when the rig may be 29 dB over it,
+    /// which is wrong in the direction that damages hearing.
+    ///
+    /// `elapsed_seconds` is not a level and is carried through unchanged.
+    pub fn to_spl(&self, spl: &crate::dsp::SplCalculator) -> LeqMetrics {
+        LeqMetrics {
+            leq_db: spl.dbfs_to_spl(self.leq_db),
+            laeq_db: spl.dbfs_to_spl(self.laeq_db),
+            lceq_db: spl.dbfs_to_spl(self.lceq_db),
+            lafmax_db: spl.dbfs_to_spl(self.lafmax_db),
+            lapeak_db: spl.dbfs_to_spl(self.lapeak_db),
+            lcpeak_db: spl.dbfs_to_spl(self.lcpeak_db),
+            elapsed_seconds: self.elapsed_seconds,
+        }
+    }
+}
+
 impl LeqMeter {
     pub fn new(sample_rate: f32) -> Self {
         Self {
@@ -764,6 +787,55 @@ mod tests {
         assert!(
             after < before - 20.0,
             "C-weighted peak survived reset: {before:.2} -> {after:.2}"
+        );
+    }
+
+    /// Displaying dBFS beside an absolute limit is the bug this conversion
+    /// exists to prevent: a -20 dBFS reading shown next to "85 dB" looks like
+    /// 105 dB of headroom, when with the default calibration the true level is
+    /// ~114 dB SPL — 29 dB OVER. Wrong in the direction that damages hearing.
+    #[test]
+    fn to_spl_lifts_dbfs_onto_the_same_scale_as_a_limit() {
+        let spl = crate::dsp::SplCalculator::default();
+        let raw = LeqMetrics {
+            leq_db: -20.0,
+            laeq_db: -20.0,
+            lceq_db: -18.0,
+            lafmax_db: -15.0,
+            lapeak_db: -6.0,
+            lcpeak_db: -5.0,
+            elapsed_seconds: 42.0,
+        };
+
+        let converted = raw.to_spl(&spl);
+        let offset = spl.dbfs_to_spl(0.0);
+
+        for (before, after) in [
+            (raw.leq_db, converted.leq_db),
+            (raw.laeq_db, converted.laeq_db),
+            (raw.lceq_db, converted.lceq_db),
+            (raw.lafmax_db, converted.lafmax_db),
+            (raw.lapeak_db, converted.lapeak_db),
+            (raw.lcpeak_db, converted.lcpeak_db),
+        ] {
+            assert!(
+                (after - (before + offset)).abs() < 1e-3,
+                "{before} dBFS should become {} dB SPL, got {after}",
+                before + offset
+            );
+        }
+
+        // A realistic level must land above an 85 dB limit, not 105 dB below it.
+        assert!(
+            converted.laeq_db > 85.0,
+            "-20 dBFS at default calibration is {} dB SPL; it must read as over \
+             an 85 dB limit, not under it",
+            converted.laeq_db
+        );
+
+        assert!(
+            (converted.elapsed_seconds - 42.0).abs() < 1e-6,
+            "elapsed time is not a level and must pass through unchanged"
         );
     }
 }
