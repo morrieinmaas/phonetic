@@ -14,7 +14,7 @@ const THEME_COLORS = {
 	dark: {
 		background: [0.05, 0.05, 0.08] as const,
 		labelFill: "#e5e5e5",
-		gridStroke: "rgba(255,255,255,0.22)",
+		gridStroke: "rgba(255,255,255,0.30)",
 		containerBg: "bg-[#191922]",
 		peakHold: "#f59e0b",
 	},
@@ -577,35 +577,61 @@ export const WebGLSpectrum = ({
 				</svg>
 
 				{/* Labels as positioned HTML rather than SVG text: a stretched
-				    coordinate space would distort glyphs, and HTML text stays crisp. */}
+				    coordinate space would distort glyphs, and HTML text stays crisp.
+				    The labels at the extremes anchor inward instead of centring on
+				    their gridline — a centred label at 0% or 100% has half its width
+				    outside the plot, which overflow-hidden then cut off. */}
 				<div className="pointer-events-none absolute inset-0">
-					{GRID_FREQUENCIES.filter((f) => f.label).map(({ hz, label }) => (
-						<span
-							key={`fl-${hz}`}
-							className="absolute -translate-x-1/2 text-xs font-bold"
-							style={{ left: `${freqToPercent(hz)}%`, bottom: 2, color: themeColors.labelFill }}
-						>
-							{label}
-						</span>
-					))}
-					{GRID_DECIBELS.map((db) => (
-						<span
-							key={`dl-${db}`}
-							className="absolute text-xs font-bold"
-							style={{
-								left: 6,
-								top: `${dbToPercent(db)}%`,
-								transform: db === 0 ? "translateY(2px)" : "translateY(-50%)",
-								color: themeColors.labelFill,
-							}}
-						>
-							{db === 0 ? "0dB" : String(db)}
-						</span>
-					))}
+					{GRID_FREQUENCIES.filter((f) => f.label).map(({ hz, label }, index, labelled) => {
+						const isFirst = index === 0;
+						const isLast = index === labelled.length - 1;
+						return (
+							<span
+								key={`fl-${hz}`}
+								className="absolute text-xs font-bold"
+								style={{
+									left: `${freqToPercent(hz)}%`,
+									bottom: 3,
+									transform: isFirst
+										? "translateX(2px)"
+										: isLast
+											? "translateX(calc(-100% - 2px))"
+											: "translateX(-50%)",
+									color: themeColors.labelFill,
+								}}
+							>
+								{label}
+							</span>
+						);
+					})}
+					{GRID_DECIBELS.map((db, index) => {
+						const isTop = index === 0;
+						const isBottom = index === GRID_DECIBELS.length - 1;
+						return (
+							<span
+								key={`dl-${db}`}
+								className="absolute text-xs font-bold"
+								style={{
+									left: 6,
+									top: `${dbToPercent(db)}%`,
+									transform: isTop
+										? "translateY(2px)"
+										: isBottom
+											? "translateY(calc(-100% - 2px))"
+											: "translateY(-50%)",
+									color: themeColors.labelFill,
+								}}
+							>
+								{db === 0 ? "0dB" : String(db)}
+							</span>
+						);
+					})}
 				</div>
 				{!isRunning && (
-					<div className="absolute inset-0 flex items-center justify-center text-muted-foreground bg-background/50 z-10">
-						Start audio stream to see spectrum
+					<div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
+						<span className="rounded-md border border-border bg-card px-3 py-1.5 text-sm text-muted-foreground shadow-lg">
+							Start audio stream to see spectrum
+						</span>
 					</div>
 				)}
 			</div>

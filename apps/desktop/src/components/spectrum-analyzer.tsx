@@ -265,8 +265,10 @@ export const SpectrumAnalyzer = ({
 				    container being observed. */}
 				<div ref={plotHostRef} className="absolute inset-0" />
 				{!isRunning && (
-					<div className="absolute inset-0 flex items-center justify-center text-muted-foreground bg-background/50 z-10">
-						Start audio stream to see spectrum
+					<div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
+						<span className="rounded-md border border-border bg-card px-3 py-1.5 text-sm text-muted-foreground shadow-lg">
+							Start audio stream to see spectrum
+						</span>
 					</div>
 				)}
 			</div>
