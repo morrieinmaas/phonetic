@@ -68,9 +68,10 @@ jobs:
 
       - name: Prepare release artifacts
         run: |
+          set -euo pipefail
           mkdir -p release-artifacts
-          cp -r apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app release-artifacts/ 2>/dev/null || true
-          cp apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg release-artifacts/ 2>/dev/null || true
+          cp -r apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app release-artifacts/
+          cp apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg release-artifacts/
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
