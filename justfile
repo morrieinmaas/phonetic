@@ -133,6 +133,11 @@ test-rust:
 test-accuracy:
     cd {{tauri}} && cargo test --test dsp_accuracy -- --nocapture
 
+# Run the room criteria tests (Rust + TS)
+test-room-criteria:
+    cargo test --manifest-path {{tauri}}/Cargo.toml room_criteria
+    cd {{desktop}} && bun test src/components/room-criteria-panel.test.tsx
+
 # Run all tests
 test: test-ts test-rust
 
