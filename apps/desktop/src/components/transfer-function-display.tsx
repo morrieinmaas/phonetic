@@ -193,7 +193,8 @@ export const TransferFunctionDisplay = ({
 
 		const container = containerRef.current;
 		const width = container.clientWidth || 600;
-		const height = Math.max(container.clientHeight, 250);
+		// Follow the container. A floor here would draw past the panel edge.
+		const height = Math.max(container.clientHeight, 120);
 
 		// Theme-specific colors with high contrast
 		const isDark = theme === "dark";
@@ -366,7 +367,7 @@ export const TransferFunctionDisplay = ({
 				if (chartRef.current && entry.contentRect.width > 0) {
 					chartRef.current.setSize({
 						width: entry.contentRect.width,
-						height: Math.max(entry.contentRect.height, 250),
+						height: Math.max(entry.contentRect.height, 120),
 					});
 				}
 			}
@@ -634,7 +635,7 @@ export const TransferFunctionDisplay = ({
 			<div
 				ref={containerRef}
 				data-testid="transfer-function-plot"
-				className="relative min-h-[280px] flex-1"
+				className="relative min-h-0 flex-1"
 				onClick={handlePlotClick}
 				onDoubleClick={handleResetZoom}
 			>
