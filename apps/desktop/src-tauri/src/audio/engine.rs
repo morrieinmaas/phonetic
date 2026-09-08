@@ -799,21 +799,38 @@ impl AudioEngine {
 
     /// Sample everything the diagnostics rules need.
     pub fn rig_snapshot(&self) -> RigSnapshot {
-        let stats = self.level_stats.lock();
+        // Copy the level statistics out and release the lock BEFORE calling
+        // get_transfer_function_data(), which does the expensive smoothing and
+        // dB conversion. The audio callback writes level_stats every block, so
+        // holding it across that work makes the real-time thread wait on a UI
+        // read -- the contention d2ac837 removed elsewhere.
+        let (reference_peak, measurement_peak, reference_rms, measurement_rms, delay_history) = {
+            let stats = self.level_stats.lock();
+            (
+                stats.reference_peak,
+                stats.measurement_peak,
+                stats.reference_rms,
+                stats.measurement_rms,
+                stats.delay_history.clone(),
+            )
+        };
+
         let data = self.get_transfer_function_data();
+
         RigSnapshot {
-            reference_peak: stats.reference_peak,
-            measurement_peak: stats.measurement_peak,
-            reference_rms: stats.reference_rms,
-            measurement_rms: stats.measurement_rms,
+            reference_peak,
+            measurement_peak,
+            reference_rms,
+            measurement_rms,
             coherence: data.coherence,
             magnitude_db: data.magnitude_db,
             frequencies: data.frequencies,
-            measured_delay_samples: stats.delay_history.last().copied().unwrap_or(0),
+            measured_delay_samples: delay_history.last().copied().unwrap_or(0),
             applied_delay_samples: self.transfer_function_delay(),
-            delay_history: stats.delay_history.clone(),
+            delay_history,
             sample_rate: self.sample_rate() as f32,
             fft_size: self.fft_size(),
+            is_running: self.is_running.load(Ordering::Acquire),
         }
     }
 

@@ -856,14 +856,26 @@ mod tests {
         engine.set_max_averages(64);
     }
 
+    /// Snapshotting a stopped engine must not panic on its empty buffers --
+    /// that was this test's original point -- and must not produce diagnoses.
+    ///
+    /// It previously asserted the opposite: that an idle engine reports
+    /// `no_measurement_signal`. That was the behaviour, and it was wrong. On
+    /// every launch the app greeted the operator with "No signal on the
+    /// measurement channel. Check phantom power, the cable, and that the right
+    /// input is selected" -- troubleshooting advice for a fault that did not
+    /// exist, before they had started anything.
     #[test]
-    fn a_stopped_engine_reports_no_signal_rather_than_panicking() {
+    fn a_stopped_engine_snapshots_without_panicking_and_reports_nothing() {
         let engine = AudioEngine::new();
         let snapshot = engine.rig_snapshot();
+        assert!(!snapshot.is_running, "a fresh engine is not running");
+
         let found = crate::dsp::diagnose(&snapshot);
         assert!(
-            found.iter().any(|d| d.code == "no_measurement_signal"),
-            "an idle engine has no measurement signal"
+            found.is_empty(),
+            "an idle rig has nothing to diagnose, got: {:?}",
+            found.iter().map(|d| &d.code).collect::<Vec<_>>()
         );
     }
 

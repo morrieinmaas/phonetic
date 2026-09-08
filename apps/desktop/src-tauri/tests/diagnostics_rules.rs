@@ -16,7 +16,59 @@ fn healthy() -> RigSnapshot {
         delay_history: vec![480, 480, 481, 480, 480],
         sample_rate: 48_000.0,
         fft_size: 4096,
+        is_running: true,
     }
+}
+
+/// What the engine actually looks like the moment the app launches: nothing
+/// running, every buffer empty.
+fn stopped() -> RigSnapshot {
+    RigSnapshot {
+        reference_peak: 0.0,
+        measurement_peak: 0.0,
+        reference_rms: 0.0,
+        measurement_rms: 0.0,
+        coherence: vec![],
+        magnitude_db: vec![],
+        frequencies: vec![],
+        measured_delay_samples: 0,
+        applied_delay_samples: 0,
+        delay_history: vec![],
+        sample_rate: 48_000.0,
+        fft_size: 4096,
+        is_running: false,
+    }
+}
+
+/// A stopped engine has silent buffers, which used to trip
+/// `no_measurement_signal` and greet the operator on every single launch with
+/// "check phantom power, the cable, and that the right input is selected" —
+/// advice about a fault that did not exist. An idle rig has nothing to
+/// diagnose.
+#[test]
+fn a_stopped_rig_reports_nothing() {
+    let found = diagnose(&stopped());
+    assert!(
+        found.is_empty(),
+        "a stopped rig should be quiet, got: {:?}",
+        found.iter().map(|d| &d.code).collect::<Vec<_>>()
+    );
+}
+
+/// The suppression must be about the stream being stopped, not about silence
+/// in general: once running, genuine silence on the measurement channel is a
+/// real fault and must still be reported.
+#[test]
+fn a_running_rig_with_no_signal_still_reports_it() {
+    let mut snapshot = stopped();
+    snapshot.is_running = true;
+
+    let found = diagnose(&snapshot);
+    assert!(
+        found.iter().any(|d| d.code == "no_measurement_signal"),
+        "running with no signal must still be diagnosed, got: {:?}",
+        found.iter().map(|d| &d.code).collect::<Vec<_>>()
+    );
 }
 
 #[test]

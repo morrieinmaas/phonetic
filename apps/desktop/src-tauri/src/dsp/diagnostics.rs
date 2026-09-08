@@ -50,6 +50,13 @@ pub struct RigSnapshot {
     pub delay_history: Vec<i32>,
     pub sample_rate: f32,
     pub fft_size: usize,
+    /// Whether the audio stream is actually running.
+    ///
+    /// Every rule here reasons about a live signal path. Against a stopped
+    /// engine the buffers are empty, so `no_measurement_signal` fires and tells
+    /// the operator to check phantom power and cabling when nothing is wrong —
+    /// it was doing that on every launch. An idle rig has nothing to diagnose.
+    pub is_running: bool,
 }
 
 const CLIPPING_PEAK: f32 = 0.999;
@@ -77,6 +84,13 @@ const RULES: [Rule; 7] = [
 
 /// Run every rule, most severe first.
 pub fn diagnose(snapshot: &RigSnapshot) -> Vec<Diagnosis> {
+    // Nothing to diagnose about a rig that is not running. Every rule below
+    // reads a live signal path; against a stopped engine they report faults
+    // that are really just "not started yet".
+    if !snapshot.is_running {
+        return Vec::new();
+    }
+
     let mut found: Vec<Diagnosis> = RULES.iter().filter_map(|rule| rule(snapshot)).collect();
     found.sort_by_key(|d| std::cmp::Reverse(d.severity));
     found
