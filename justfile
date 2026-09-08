@@ -133,6 +133,16 @@ test-rust:
 test-accuracy:
     cd {{tauri}} && cargo test --test dsp_accuracy -- --nocapture
 
+# Run the channel matrix tests (Rust + TS)
+test-matrix:
+    cd {{tauri}} && cargo test routing
+    cd {{tauri}} && cargo test --lib audio::engine
+    cd {{desktop}} && bun test src/components/channel-matrix.test.tsx
+
+# Sustained-load test for 32 pairs (release build, ~1 min)
+soak-matrix:
+    cd {{tauri}} && cargo test --test matrix_soak --release -- --nocapture
+
 # Run all tests
 test: test-ts test-rust
 
