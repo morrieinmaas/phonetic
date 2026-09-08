@@ -74,11 +74,23 @@ jobs:
       - name: Install JS dependencies
         run: bun install --frozen-lockfile
 
+      # Tauri's generate_context! macro expands at compile time and reads the
+      # frontend dist directory, which is gitignored and absent on a fresh
+      # checkout. The lint job already does this before clippy for the same
+      # reason.
+      - name: Build frontend
+        run: cd apps/desktop && bun run build
+
       - name: Rust tests
         run: cd apps/desktop/src-tauri && cargo test
 
+      # No `|| true` here: swallowing a failing suite is how a green tick stops
+      # meaning anything.
       - name: TypeScript tests
-        run: bun test || echo "No TypeScript tests found"
+        run: bun test
+
+      - name: CLI selftest
+        run: cd apps/desktop/src-tauri && cargo run --bin phonetic-cli -- selftest
 
   build:
     name: Build
