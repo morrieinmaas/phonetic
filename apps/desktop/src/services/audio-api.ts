@@ -5,7 +5,10 @@ import type {
 	AudioState,
 	BiquadFilter,
 	Diagnosis,
+	DoseResult,
+	LeqMetrics,
 	LicenseState,
+	NoiseLimit,
 	ReferenceCurve,
 	ReferenceCurveInfo,
 	ReferenceCurveType,
@@ -312,6 +315,42 @@ export const audioApi = {
 	 */
 	activateLicense: (key: string): Promise<LicenseState> =>
 		invoke<LicenseState>("activate_license", { key }),
+
+	// ========================================================================
+	// LEQ / noise dose
+	// ========================================================================
+
+	/**
+	 * Current LAeq/LCeq/LAFmax/LApeak/LCpeak/elapsed reading, integrated
+	 * since the stream last (re)started.
+	 */
+	getLeqMetrics: (): Promise<LeqMetrics> => invoke<LeqMetrics>("get_leq_metrics"),
+
+	/**
+	 * The shipped noise-exposure limit presets, each sourced and dated.
+	 */
+	listNoiseLimits: (): Promise<NoiseLimit[]> => invoke<NoiseLimit[]>("list_noise_limits"),
+
+	/**
+	 * Exposure dose against `limit`, computed from the live LEQ meter through
+	 * this app's live SPL calibration.
+	 * @param limit - The noise limit to compare the current measurement against
+	 */
+	computeLeqDose: (limit: NoiseLimit): Promise<DoseResult> =>
+		invoke<DoseResult>("compute_leq_dose", { limit }),
+
+	/**
+	 * Starts appending a periodic LEQ snapshot to `path` on disk.
+	 * @param path - Filesystem path to append the CSV log to
+	 * @param intervalSeconds - How often to record a snapshot, in seconds
+	 */
+	startLeqLogging: (path: string, intervalSeconds: number): Promise<void> =>
+		invoke("start_leq_logging", { path, intervalSeconds }),
+
+	/**
+	 * Stops LEQ logging, if it is running.
+	 */
+	stopLeqLogging: (): Promise<void> => invoke("stop_leq_logging"),
 };
 
 /**
@@ -333,9 +372,12 @@ export type {
 	AudioDeviceList,
 	AudioState,
 	BiquadFilter,
+	DoseResult,
 	FilterType,
+	LeqMetrics,
 	LicenseState,
 	MeasurementPair,
+	NoiseLimit,
 	ReferenceCurve,
 	ReferenceCurveInfo,
 	ReferenceCurveType,

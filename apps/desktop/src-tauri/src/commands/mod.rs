@@ -1,15 +1,22 @@
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, SystemTime};
+
 use tauri::{Manager, State};
 
 use crate::audio::{
     enumerate_devices, AudioBackend, AudioDeviceList, AudioEngine, AudioState, Routing, SignalType,
 };
 use crate::dsp::{
-    diagnose, export_impulse_response_csv, export_impulse_response_json,
+    diagnose, dose, export_impulse_response_csv, export_impulse_response_json,
     export_impulse_response_txt, export_transfer_function_csv, export_transfer_function_json,
     export_transfer_function_txt, generate_standard_frequencies, predict_with_eq, write_to_file,
-    BiquadFilter, DelayFinder, DelayResult, Diagnosis, ExportFormat, ImpulseResponseData,
-    ImpulseResponseProcessor, MeasurementMetadata, MicrophoneCalibration, ReferenceCurve,
-    ReferenceCurveType, SmoothingFraction, SplCalculator, TransferFunctionData,
+    BiquadFilter, DelayFinder, DelayResult, Diagnosis, DoseResult, ExportFormat,
+    ImpulseResponseData, ImpulseResponseProcessor, LeqLogger, LeqMetrics, LimitSet,
+    MeasurementMetadata, MicrophoneCalibration, NoiseLimit, ReferenceCurve, ReferenceCurveType,
+    SmoothingFraction, SplCalculator, TransferFunctionData,
 };
 use parking_lot::Mutex;
 
@@ -24,11 +31,26 @@ const MAX_AMPLITUDE: f64 = 1.0;
 const FFT_SIZE: usize = 2048;
 const DEFAULT_SAMPLE_RATE: f32 = 48000.0;
 
+/// Tracks the background thread appending periodic LEQ snapshots to a CSV
+/// log (see `start_leq_logging`). The loop wakes every 100ms rather than
+/// sleeping the full `interval_seconds` so `stop_leq_logging` can join it
+/// promptly instead of blocking the command for however long the configured
+/// interval is -- which can be many minutes.
+struct LeqLoggingSession {
+    stop: Arc<AtomicBool>,
+    handle: thread::JoinHandle<()>,
+}
+
 /// DSP state for delay finder, impulse response, and calibration
 pub struct DspState {
     pub delay_finder: Mutex<DelayFinder>,
     pub impulse_response: Mutex<ImpulseResponseProcessor>,
     pub spl_calculator: Mutex<SplCalculator>,
+    /// `None` when LEQ interval logging isn't running. File I/O never
+    /// happens in the audio callback -- this thread lives entirely on the
+    /// command side, reading the engine's `LeqMeter` through its shared
+    /// handle instead.
+    leq_logging: Mutex<Option<LeqLoggingSession>>,
 }
 
 impl DspState {
@@ -40,6 +62,7 @@ impl DspState {
                 DEFAULT_SAMPLE_RATE,
             )),
             spl_calculator: Mutex::new(SplCalculator::default()),
+            leq_logging: Mutex::new(None),
         }
     }
 }
@@ -636,6 +659,106 @@ pub async fn load_session(path: String) -> Result<crate::session::Session, Strin
     crate::session::load_session_from_path(&path)
 }
 
+// ============================================================================
+// LEQ Commands
+// ============================================================================
+
+/// Current LAeq/LCeq/LAFmax/LApeak/LCpeak/elapsed reading, integrated since
+/// the stream last (re)started -- see `AudioEngine::leq_metrics`.
+#[tauri::command]
+pub async fn get_leq_metrics(engine: State<'_, AudioEngine>) -> Result<LeqMetrics, String> {
+    Ok(engine.leq_metrics())
+}
+
+/// The shipped noise-exposure limit presets, each sourced and dated (see
+/// `dsp::noise_limits`). Selecting one is a frontend concern: the operator's
+/// chosen `NoiseLimit` is passed back whole to `compute_leq_dose` rather than
+/// looked up again by id here.
+#[tauri::command]
+pub async fn list_noise_limits() -> Result<Vec<NoiseLimit>, String> {
+    Ok(LimitSet::builtin().limits)
+}
+
+/// Exposure dose against `limit`, computed from the live LEQ meter through
+/// the app's *live* SPL calibration (`dsp.spl_calculator`) -- never
+/// `SplCalculator::default()`'s placeholder +134 dB offset. `LeqMetrics` are
+/// dBFS and `limit` is absolute SPL; passing a default instead of the
+/// operator's actual calibration here would silently produce a confident,
+/// wrong dose number -- the exact defect commit aef651f fixed.
+#[tauri::command]
+pub async fn compute_leq_dose(
+    dsp: State<'_, DspState>,
+    engine: State<'_, AudioEngine>,
+    limit: NoiseLimit,
+) -> Result<DoseResult, String> {
+    let metrics = engine.leq_metrics();
+    let spl = dsp.spl_calculator.lock();
+    Ok(dose(&metrics, &limit, &spl))
+}
+
+/// Starts appending a snapshot of the running LEQ measurement to `path`
+/// every `interval_seconds`, on a background thread -- file I/O has no place
+/// in the audio callback. Each snapshot is the meter's *cumulative* reading
+/// at that instant, not a re-integrated per-interval average: the same
+/// meter backs `compute_leq_dose`, whose math needs `elapsed_seconds` to
+/// keep growing across the whole reference period, so nothing here may reset
+/// it. `interval_seconds` is written on every row precisely so a reader can
+/// tell a 1-second cadence from a 15-minute one apart -- see `dsp::leq_log`.
+#[tauri::command]
+pub async fn start_leq_logging(
+    dsp: State<'_, DspState>,
+    engine: State<'_, AudioEngine>,
+    path: String,
+    interval_seconds: f64,
+) -> Result<(), String> {
+    if !interval_seconds.is_finite() || interval_seconds <= 0.0 {
+        return Err("interval_seconds must be a positive, finite number".to_string());
+    }
+
+    let mut session = dsp.leq_logging.lock();
+    if session.is_some() {
+        return Err("LEQ logging is already running; stop it first".to_string());
+    }
+
+    let mut logger = LeqLogger::new(PathBuf::from(path), interval_seconds)?;
+    let leq_meter = engine.leq_meter_handle();
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_for_thread = Arc::clone(&stop);
+    let target = Duration::from_secs_f64(interval_seconds);
+    let tick = Duration::from_millis(100);
+
+    let handle = thread::spawn(move || {
+        let mut waited = Duration::ZERO;
+        while !stop_for_thread.load(Ordering::Relaxed) {
+            thread::sleep(tick);
+            waited += tick;
+            if waited < target {
+                continue;
+            }
+            waited = Duration::ZERO;
+            let metrics = leq_meter.lock().metrics();
+            if let Err(err) = logger.record(&metrics, SystemTime::now()) {
+                log::error!("LEQ log write failed: {err}");
+            }
+        }
+    });
+
+    *session = Some(LeqLoggingSession { stop, handle });
+    Ok(())
+}
+
+/// Stops the background logger started by `start_leq_logging`. A no-op if
+/// logging isn't running.
+#[tauri::command]
+pub async fn stop_leq_logging(dsp: State<'_, DspState>) -> Result<(), String> {
+    let session = dsp.leq_logging.lock().take();
+    if let Some(session) = session {
+        session.stop.store(true, Ordering::Relaxed);
+        let _ = session.handle.join();
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -808,6 +931,23 @@ mod tests {
         assert!(
             error.contains("does-not-exist"),
             "the error should name the id that wasn't found: {error}"
+        );
+    }
+
+    /// `list_noise_limits` takes no `State`, so unlike the LEQ commands that
+    /// read `AudioEngine`/`DspState` (untestable here without a running
+    /// Tauri app -- no existing command test in this file does that either),
+    /// this one can be exercised directly. The dose math itself and every
+    /// builtin preset's source/date are already covered exhaustively in
+    /// `dsp::noise_limits`'s own tests; this just proves the command wires
+    /// through to `LimitSet::builtin()` rather than something else.
+    #[test]
+    fn list_noise_limits_command_returns_the_builtin_presets() {
+        let limits = tauri::async_runtime::block_on(list_noise_limits()).unwrap();
+        assert_eq!(limits.len(), LimitSet::builtin().limits.len());
+        assert!(
+            limits.iter().all(|limit| !limit.source.trim().is_empty()),
+            "every returned limit must be sourced"
         );
     }
 }

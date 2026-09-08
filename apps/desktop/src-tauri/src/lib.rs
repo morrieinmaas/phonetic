@@ -96,6 +96,12 @@ pub fn run() {
             // Session save/load commands
             commands::save_session,
             commands::load_session,
+            // LEQ commands
+            commands::get_leq_metrics,
+            commands::list_noise_limits,
+            commands::compute_leq_dose,
+            commands::start_leq_logging,
+            commands::stop_leq_logging,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

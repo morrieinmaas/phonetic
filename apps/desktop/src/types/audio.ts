@@ -172,3 +172,45 @@ export interface Session {
 	settings: SessionSettings;
 	traces: StoredTrace[];
 }
+
+/**
+ * LEQ/LAeq/LCeq/peak reading, integrated since the stream last (re)started.
+ * All values are dBFS, matching the Rust `LeqMetrics` wire format exactly --
+ * they need the app's own SPL calibration (see `compute_leq_dose`) to become
+ * an absolute SPL number.
+ */
+export interface LeqMetrics {
+	leq_db: number;
+	laeq_db: number;
+	lceq_db: number;
+	lafmax_db: number;
+	lapeak_db: number;
+	lcpeak_db: number;
+	elapsed_seconds: number;
+}
+
+/**
+ * One noise-exposure limit preset, matching the Rust `NoiseLimit` wire
+ * format exactly. `source` and `as_of` are required and non-empty on every
+ * shipped preset -- a limit without a citation is a number presented as
+ * authority, which this app never does.
+ */
+export interface NoiseLimit {
+	id: string;
+	name: string;
+	source: string;
+	as_of: string;
+	laeq_limit_db: number;
+	reference_hours: number;
+	lcpeak_limit_db: number | null;
+}
+
+/**
+ * The result of comparing a measurement against a limit's reference period,
+ * matching the Rust `DoseResult` wire format exactly.
+ */
+export interface DoseResult {
+	percent: number;
+	projected_percent_at_reference: number;
+	peak_exceeded: boolean;
+}

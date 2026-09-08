@@ -143,6 +143,12 @@ test-matrix:
 soak-matrix:
     cd {{tauri}} && cargo test --test matrix_soak --release -- --nocapture
 
+# Run the LEQ tests (Rust + TS)
+test-leq:
+    cargo test --manifest-path {{tauri}}/Cargo.toml leq
+    cargo test --manifest-path {{tauri}}/Cargo.toml noise_limits
+    cd {{desktop}} && bun test src/components/leq-panel.test.tsx
+
 # Run all tests
 test: test-ts test-rust
 

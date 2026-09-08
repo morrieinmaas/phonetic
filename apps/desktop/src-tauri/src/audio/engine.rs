@@ -13,8 +13,8 @@ use super::realtime::configure_audio_thread;
 use super::routing::MeasurementPair;
 use super::routing::{ReferenceSource, Routing, MAX_MEASUREMENT_PAIRS};
 use crate::dsp::{
-    FftProcessor, MultiWindowProcessor, RigSnapshot, SmoothingFraction, TransferFunctionData,
-    TransferFunctionProcessor,
+    FftProcessor, LeqMeter, LeqMetrics, MultiWindowProcessor, RigSnapshot, SmoothingFraction,
+    TransferFunctionData, TransferFunctionProcessor,
 };
 
 #[cfg(target_os = "macos")]
@@ -155,6 +155,14 @@ pub struct AudioEngine {
     // increment, no lock held across any work — so the UI thread publishing a
     // new routing can never block the audio thread. See commit d2ac837.
     routing: Arc<Mutex<Arc<Routing>>>,
+    /// LEQ/LAeq/LCeq/peak meter, fed from both input callbacks (CPAL and
+    /// CoreAudio) via `feed_leq_meter` below. `push` is a bounded running
+    /// sum and `metrics()` a read of seven floats -- neither is expensive
+    /// work under a lock, so this needs no commit-d2ac837-style snapshot
+    /// split. Recreated (not just re-pointed) at the start of each stream so
+    /// its A/C-weighting biquads are designed for the device's real sample
+    /// rate -- see `start_cpal_stream`/`start_coreaudio_stream`.
+    leq_meter: Arc<Mutex<LeqMeter>>,
 }
 
 // SAFETY: AudioEngine is Send + Sync because:
@@ -214,6 +222,7 @@ impl AudioEngine {
             exclusive_mode: Arc::new(AtomicBool::new(false)),
             level_stats: Arc::new(Mutex::new(LevelStats::default())),
             routing: Arc::new(Mutex::new(Arc::new(Routing::default()))),
+            leq_meter: Arc::new(Mutex::new(LeqMeter::new(DEFAULT_SAMPLE_RATE))),
         }
     }
 
@@ -359,6 +368,14 @@ impl AudioEngine {
             .lock()
             .set_sample_rate(sample_rate as f32);
 
+        // The A/C-weighting biquads are designed at construction time for a
+        // specific sample rate (see dsp::leq) -- a stale rate here would
+        // silently mis-weight every reading on any device that isn't 48 kHz,
+        // same failure mode as the processors above. Recreated rather than
+        // just re-pointed, so a restarted stream also starts a fresh
+        // measurement, matching `reference_buffer.lock().clear()` below.
+        *self.leq_meter.lock() = LeqMeter::new(sample_rate as f32);
+
         // Reset stop signal and clear reference buffer
         self.stop_signal.store(false, Ordering::Relaxed);
         self.reference_buffer.lock().clear();
@@ -380,6 +397,7 @@ impl AudioEngine {
         let reference_buffer = Arc::clone(&self.reference_buffer);
         let level_stats = Arc::clone(&self.level_stats);
         let routing = Arc::clone(&self.routing);
+        let leq_meter = Arc::clone(&self.leq_meter);
 
         let output_channels = output_config.channels();
 
@@ -404,6 +422,7 @@ impl AudioEngine {
                 reference_buffer,
                 level_stats,
                 routing,
+                leq_meter,
             );
         });
 
@@ -500,6 +519,12 @@ impl AudioEngine {
             .lock()
             .set_sample_rate(sample_rate as f32);
 
+        // See the matching comment in `start_cpal_stream`: the A/C-weighting
+        // biquads are designed for a specific sample rate, so the meter must
+        // be recreated here too -- this backend must never diverge from the
+        // other one on this.
+        *self.leq_meter.lock() = LeqMeter::new(sample_rate as f32);
+
         // Reset stop signal and clear reference buffer
         self.stop_signal.store(false, Ordering::Relaxed);
         self.reference_buffer.lock().clear();
@@ -522,6 +547,7 @@ impl AudioEngine {
         let level_stats = Arc::clone(&self.level_stats);
         let exclusive_mode = self.exclusive_mode.load(Ordering::Relaxed);
         let routing = Arc::clone(&self.routing);
+        let leq_meter = Arc::clone(&self.leq_meter);
 
         // Spawn audio thread
         let handle = thread::spawn(move || {
@@ -544,6 +570,7 @@ impl AudioEngine {
                 reference_buffer,
                 level_stats,
                 routing,
+                leq_meter,
             );
         });
 
@@ -833,6 +860,21 @@ impl AudioEngine {
     pub fn routing(&self) -> Arc<Routing> {
         self.routing.lock().clone()
     }
+
+    /// Current LAeq/LCeq/LAFmax/LApeak/LCpeak/elapsed reading, integrated
+    /// since the stream last (re)started. A read of seven floats under the
+    /// lock, safe to call from a UI poll.
+    pub fn leq_metrics(&self) -> LeqMetrics {
+        self.leq_meter.lock().metrics()
+    }
+
+    /// A clone of the shared meter handle, for code that needs to read
+    /// metrics off the audio thread -- e.g. the interval logger's
+    /// background thread (see `commands::start_leq_logging`), which must
+    /// never do its file I/O from inside the callback itself.
+    pub fn leq_meter_handle(&self) -> Arc<Mutex<LeqMeter>> {
+        Arc::clone(&self.leq_meter)
+    }
 }
 
 impl Default for AudioEngine {
@@ -883,6 +925,7 @@ fn run_cpal_streams(
     reference_buffer: Arc<Mutex<Vec<f32>>>,
     level_stats: Arc<Mutex<LevelStats>>,
     routing: Arc<Mutex<Arc<Routing>>>,
+    leq_meter: Arc<Mutex<LeqMeter>>,
 ) {
     // Set real-time priority for this audio thread
     configure_audio_thread();
@@ -930,6 +973,13 @@ fn run_cpal_streams(
             // whether or not the generator is producing a reference, or the
             // analyser goes blank on a live source and clipping goes undetected.
             fft_processor.lock().process(measurement_data);
+
+            // LEQ integration is input-only for the same reason, and must sit
+            // above the reference-buffer draining below: that same
+            // reference-gated placement once silently killed the spectrum
+            // analyser (see the comment above), and LEQ must not repeat it.
+            // See `feed_leq_meter` for why both backends share this call.
+            feed_leq_meter(&leq_meter, measurement_data);
 
             // The transfer function needs a reference. Take it without holding
             // any other lock. This is the generator's own output, shared by
@@ -1069,6 +1119,7 @@ fn run_coreaudio_streams(
     reference_buffer: Arc<Mutex<Vec<f32>>>,
     level_stats: Arc<Mutex<LevelStats>>,
     routing: Arc<Mutex<Arc<Routing>>>,
+    leq_meter: Arc<Mutex<LeqMeter>>,
 ) {
     // Set real-time priority for this audio thread
     configure_audio_thread();
@@ -1119,6 +1170,13 @@ fn run_coreaudio_streams(
             // whether or not the generator is producing a reference, or the
             // analyser goes blank on a live source and clipping goes undetected.
             fft_proc_clone.lock().process(measurement_data);
+
+            // LEQ integration is input-only for the same reason, and must sit
+            // above the reference-buffer draining below -- the exact bug that
+            // once killed the spectrum analyser above. See `feed_leq_meter`:
+            // this call must be identical to the CPAL callback's, or LEQ
+            // silently diverges between backends.
+            feed_leq_meter(&leq_meter, measurement_data);
 
             // The transfer function needs a reference. Take it without holding
             // any other lock. This is the generator's own output, shared by
@@ -1233,6 +1291,17 @@ fn run_coreaudio_streams(
 
     is_running.store(false, Ordering::Relaxed);
     log::info!("CoreAudio streams stopped");
+}
+
+/// Feeds one audio block into the LEQ meter. Both the CPAL and CoreAudio
+/// input callbacks call this exact function rather than each locking
+/// `leq_meter` inline, so the two backends' LEQ behaviour cannot drift apart
+/// -- the same divergence-between-backends failure mode `process_active_pairs`
+/// exists to prevent for pair routing. `push` is a bounded running sum, safe
+/// to do under this lock every block (see `dsp::leq`'s module doc for the
+/// real-time constraints it was written against).
+fn feed_leq_meter(leq_meter: &Mutex<LeqMeter>, measurement_data: &[f32]) {
+    leq_meter.lock().push(measurement_data);
 }
 
 /// Run one measurement pair's block through its transfer function processor.
@@ -1828,6 +1897,43 @@ mod tests {
         assert_eq!(
             a_before.magnitude_db, a_after.magnitude_db,
             "pair a's slot kept the same id and must not have been reset"
+        );
+    }
+
+    /// `feed_leq_meter` is the single call site both input callbacks share.
+    /// Proving it pushes into the meter is proving both backends do, without
+    /// needing a real audio device to exercise either callback directly.
+    #[test]
+    fn feed_leq_meter_pushes_the_block_into_the_meter() {
+        let leq_meter = Mutex::new(LeqMeter::new(DEFAULT_SAMPLE_RATE));
+        let block = vec![0.5f32; DEFAULT_SAMPLE_RATE as usize];
+
+        feed_leq_meter(&leq_meter, &block);
+
+        let metrics = leq_meter.lock().metrics();
+        assert!(
+            (metrics.elapsed_seconds - 1.0).abs() < 1e-6,
+            "expected one second of samples pushed, got {}",
+            metrics.elapsed_seconds
+        );
+    }
+
+    /// `AudioEngine::leq_metrics` and `leq_meter_handle` are the two ways
+    /// anything outside this module reads the meter (commands and the
+    /// interval logger, respectively). Both must observe the same pushed
+    /// samples through the engine's own field, not a copy.
+    #[test]
+    fn engine_leq_metrics_reflects_samples_pushed_through_the_shared_handle() {
+        let engine = AudioEngine::new();
+        let handle = engine.leq_meter_handle();
+        let block = vec![0.25f32; 1000];
+
+        feed_leq_meter(&handle, &block);
+
+        let metrics = engine.leq_metrics();
+        assert!(
+            metrics.elapsed_seconds > 0.0,
+            "leq_metrics() should reflect samples pushed via leq_meter_handle()"
         );
     }
 }

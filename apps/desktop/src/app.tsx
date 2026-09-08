@@ -1,3 +1,4 @@
+import { save } from "@tauri-apps/plugin-dialog";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { ChannelMatrix } from "./components/channel-matrix";
@@ -5,6 +6,8 @@ import { ChannelSelector } from "./components/channel-selector";
 import { DeviceSelector } from "./components/device-selector";
 import { DiagnosticsBanner } from "./components/diagnostics-banner";
 import { GeneratorControls } from "./components/generator-controls";
+import { LeqPanel } from "./components/leq-panel";
+import type { LeqPanelMetrics } from "./components/leq-panel";
 import { LicenseDialog, shouldBlockUsage } from "./components/license-dialog";
 import { PermissionDialog } from "./components/permission-dialog";
 import { SessionControls } from "./components/session-controls";
@@ -18,12 +21,15 @@ import { WebGLSpectrum } from "./components/webgl-spectrum";
 import { createPollLoop } from "./lib/poll-loop";
 import { audioApi } from "./services/audio-api";
 import { useAudioStore } from "./stores/audio-store";
-import type { LicenseState, Routing } from "./types/audio";
+import type { DoseResult, LicenseState, NoiseLimit, Routing } from "./types/audio";
 
 type SpectrumRenderer = "uplot" | "webgl";
-type SecondaryView = "transfer" | "spectrogram" | "matrix";
+type SecondaryView = "transfer" | "spectrogram" | "matrix" | "leq";
 
-const SECONDARY_VIEWS: readonly SecondaryView[] = ["transfer", "spectrogram", "matrix"];
+const SECONDARY_VIEWS: readonly SecondaryView[] = ["transfer", "spectrogram", "matrix", "leq"];
+
+/** How often a completed LEQ interval is appended to the log, in seconds. */
+const LEQ_LOG_INTERVAL_SECONDS = 60;
 
 /**
  * Validates a value restored from localStorage against the current SecondaryView union.
@@ -65,6 +71,17 @@ export const App = () => {
 	const [permissionDialogOpen, setPermissionDialogOpen] = useState(false);
 	const [routing, setRoutingState] = useState<Routing>({ pairs: [] });
 	const [isMultiWindow, setIsMultiWindow] = useState(false);
+
+	// LEQ / noise dose state. Polled only while the LEQ view is visible and
+	// the stream is running (see the effect below) -- an un-awaited IPC call
+	// per animation frame is what froze this app before, and there is no
+	// reason to poll a view nobody can see.
+	const [leqMetrics, setLeqMetrics] = useState<LeqPanelMetrics | null>(null);
+	const [leqLimits, setLeqLimits] = useState<NoiseLimit[]>([]);
+	const [selectedLeqLimit, setSelectedLeqLimit] = useState<NoiseLimit | null>(null);
+	const [leqDose, setLeqDose] = useState<DoseResult | null>(null);
+	const [leqLogging, setLeqLogging] = useState(false);
+	const [leqLoggingPath, setLeqLoggingPath] = useState<string | null>(null);
 
 	// Animation frame ref for spectrum polling
 
@@ -144,6 +161,45 @@ export const App = () => {
 			.catch(() => setRoutingState({ pairs: [] }));
 	}, []);
 
+	// The noise-limit presets are a small, static list -- fetched once rather
+	// than on every LEQ poll tick. Defaults to the first preset so the panel
+	// has something to compare against as soon as a measurement exists.
+	useEffect(() => {
+		audioApi
+			.listNoiseLimits()
+			.then((limits) => {
+				setLeqLimits(limits);
+				setSelectedLeqLimit((current) => current ?? limits[0] ?? null);
+			})
+			.catch(() => setLeqLimits([]));
+	}, []);
+
+	// LEQ metrics/dose polling loop.
+	//
+	// Gated on the LEQ view actually being visible, on top of the stream
+	// running: the meter keeps integrating in the audio callback regardless,
+	// but there is no reason to poll it -- or repeatedly ask the backend to
+	// recompute dose -- for a view nobody can see. See the spectrum polling
+	// loop below for why each poll must finish before the next is scheduled.
+	useEffect(() => {
+		const isRunning = audioState?.is_running ?? false;
+		if (secondaryView !== "leq" || !isRunning) {
+			return;
+		}
+
+		return createPollLoop(
+			async () => {
+				const metrics = await audioApi.getLeqMetrics();
+				setLeqMetrics(metrics);
+				if (selectedLeqLimit) {
+					setLeqDose(await audioApi.computeLeqDose(selectedLeqLimit));
+				}
+			},
+			(callback) => window.setTimeout(callback, 300),
+			(handle) => window.clearTimeout(handle),
+		);
+	}, [secondaryView, audioState?.is_running, selectedLeqLimit]);
+
 	// Multi-window polling loop.
 	//
 	// Whether multi-window is active only needs to be known while the operator
@@ -175,6 +231,34 @@ export const App = () => {
 			// was never applied.
 			setRoutingState(previous);
 			console.error("Failed to update routing:", e);
+		}
+	};
+
+	const handleSelectLeqLimit = (id: string) => {
+		setSelectedLeqLimit(leqLimits.find((candidate) => candidate.id === id) ?? null);
+		setLeqDose(null);
+	};
+
+	const handleStartLeqLogging = async () => {
+		const path = await save({ filters: [{ name: "LEQ log", extensions: ["csv"] }] });
+		if (!path) return;
+		try {
+			await audioApi.startLeqLogging(path, LEQ_LOG_INTERVAL_SECONDS);
+			setLeqLogging(true);
+			setLeqLoggingPath(path);
+		} catch (e) {
+			console.error("Failed to start LEQ logging:", e);
+		}
+	};
+
+	const handleStopLeqLogging = async () => {
+		try {
+			await audioApi.stopLeqLogging();
+		} catch (e) {
+			console.error("Failed to stop LEQ logging:", e);
+		} finally {
+			setLeqLogging(false);
+			setLeqLoggingPath(null);
 		}
 	};
 
@@ -267,6 +351,19 @@ export const App = () => {
 				channelCount={inputChannelCount}
 				onChange={handleRoutingChange}
 				isMultiWindow={isMultiWindow}
+			/>
+		),
+		leq: (
+			<LeqPanel
+				metrics={leqMetrics}
+				limit={selectedLeqLimit}
+				dose={leqDose}
+				availableLimits={leqLimits}
+				onSelectLimit={handleSelectLeqLimit}
+				isLogging={leqLogging}
+				loggingPath={leqLoggingPath}
+				onStartLogging={handleStartLeqLogging}
+				onStopLogging={handleStopLeqLogging}
 			/>
 		),
 	};
@@ -508,6 +605,17 @@ export const App = () => {
 										}`}
 									>
 										Channel Matrix
+									</button>
+									<button
+										type="button"
+										onClick={() => setSecondaryView("leq")}
+										className={`px-2 py-1 text-xs transition-colors ${
+											secondaryView === "leq"
+												? "bg-primary text-primary-foreground"
+												: "bg-transparent text-muted-foreground hover:bg-muted"
+										}`}
+									>
+										Noise Dose
 									</button>
 								</div>
 							</div>
