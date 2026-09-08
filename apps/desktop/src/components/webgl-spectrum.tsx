@@ -15,14 +15,14 @@ const THEME_COLORS = {
 		background: [0.05, 0.05, 0.08] as const,
 		labelFill: "#e5e5e5",
 		gridStroke: "rgba(255,255,255,0.1)",
-		containerBg: "bg-[#0d0d12]",
+		containerBg: "bg-[#15151d]",
 		peakHold: "#f59e0b",
 	},
 	light: {
 		background: [0.97, 0.97, 0.98] as const,
 		labelFill: "#171717",
 		gridStroke: "rgba(0,0,0,0.15)",
-		containerBg: "bg-[#f8f8fa]",
+		containerBg: "bg-[#eeeef3]",
 		peakHold: "#d97706",
 	},
 };
