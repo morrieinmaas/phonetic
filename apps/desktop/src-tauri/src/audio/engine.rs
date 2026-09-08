@@ -9,9 +9,9 @@ use std::thread;
 use super::deinterleave::ChannelBuffers;
 use super::generator::{Generator, SignalType};
 use super::realtime::configure_audio_thread;
-use super::routing::Routing;
 #[cfg(test)]
-use super::routing::{MeasurementPair, ReferenceSource};
+use super::routing::MeasurementPair;
+use super::routing::{ReferenceSource, Routing};
 use crate::dsp::{
     FftProcessor, MultiWindowProcessor, RigSnapshot, SmoothingFraction, TransferFunctionData,
     TransferFunctionProcessor,
@@ -358,6 +358,7 @@ impl AudioEngine {
         let stop_signal = Arc::clone(&self.stop_signal);
         let reference_buffer = Arc::clone(&self.reference_buffer);
         let level_stats = Arc::clone(&self.level_stats);
+        let routing = Arc::clone(&self.routing);
 
         let output_channels = output_config.channels();
 
@@ -381,6 +382,7 @@ impl AudioEngine {
                 stop_signal,
                 reference_buffer,
                 level_stats,
+                routing,
             );
         });
 
@@ -495,6 +497,7 @@ impl AudioEngine {
         let reference_buffer = Arc::clone(&self.reference_buffer);
         let level_stats = Arc::clone(&self.level_stats);
         let exclusive_mode = self.exclusive_mode.load(Ordering::Relaxed);
+        let routing = Arc::clone(&self.routing);
 
         // Spawn audio thread
         let handle = thread::spawn(move || {
@@ -516,6 +519,7 @@ impl AudioEngine {
                 stop_signal,
                 reference_buffer,
                 level_stats,
+                routing,
             );
         });
 
@@ -803,6 +807,7 @@ fn run_cpal_streams(
     stop_signal: Arc<AtomicBool>,
     reference_buffer: Arc<Mutex<Vec<f32>>>,
     level_stats: Arc<Mutex<LevelStats>>,
+    routing: Arc<Mutex<Arc<Routing>>>,
 ) {
     // Set real-time priority for this audio thread
     configure_audio_thread();
@@ -826,6 +831,7 @@ fn run_cpal_streams(
     let meas_channel = Arc::clone(&measurement_channel);
     let ref_buffer_for_input = Arc::clone(&reference_buffer);
     let stats = Arc::clone(&level_stats);
+    let routing_for_input = Arc::clone(&routing);
 
     // Allocated once, up front, sized for the maximum supported channel count
     // so it never needs to grow. Deinterleaving inside the callback below must
@@ -851,8 +857,10 @@ fn run_cpal_streams(
             fft_processor.lock().process(measurement_data);
 
             // The transfer function needs a reference. Take it without holding
-            // any other lock.
-            let reference: Option<Vec<f32>> = {
+            // any other lock. This is the generator's own output, shared by
+            // every Generator-referenced pair below — an Input-referenced pair
+            // needs none of this and must still be processed if it's empty.
+            let generator_reference: Option<Vec<f32>> = {
                 let mut ref_buf = ref_buffer_for_input.lock();
                 if ref_buf.len() >= frame_len {
                     Some(ref_buf.drain(..frame_len).collect())
@@ -861,28 +869,28 @@ fn run_cpal_streams(
                 }
             };
 
-            let Some(ref_data) = reference else {
-                stats.lock().update(measurement_data, &[]);
-                return;
-            };
+            stats.lock().update(
+                measurement_data,
+                generator_reference.as_deref().unwrap_or(&[]),
+            );
 
-            stats.lock().update(measurement_data, &ref_data);
-
-            // Process transfer function
-            // Route to whichever resolution mode is active. Both processors keep
-            // their own state, so switching modes never loses the other's averages.
+            // Route to whichever resolution mode is active. Multi-window is a
+            // single global high-resolution view of the legacy measurement
+            // channel; the matrix below is every active pair against its own
+            // reference. They keep their own state, so switching modes never
+            // loses the other's averages.
             if mw_enabled.load(Ordering::Relaxed) {
-                mw_processor.lock().process(measurement_data, &ref_data);
-            } else {
-                for (index, processor) in tf_processors
-                    .iter()
-                    .enumerate()
-                    .take(channel_buffers.channel_count())
-                {
-                    processor
-                        .lock()
-                        .process(channel_buffers.channel(index), &ref_data);
+                if let Some(ref_data) = &generator_reference {
+                    mw_processor.lock().process(measurement_data, ref_data);
                 }
+            } else {
+                let routing = routing_for_input.lock().clone();
+                process_active_pairs(
+                    &routing,
+                    &channel_buffers,
+                    &tf_processors,
+                    generator_reference.as_deref(),
+                );
             }
         },
         |err| log::error!("Input stream error: {}", err),
@@ -985,6 +993,7 @@ fn run_coreaudio_streams(
     stop_signal: Arc<AtomicBool>,
     reference_buffer: Arc<Mutex<Vec<f32>>>,
     level_stats: Arc<Mutex<LevelStats>>,
+    routing: Arc<Mutex<Arc<Routing>>>,
 ) {
     // Set real-time priority for this audio thread
     configure_audio_thread();
@@ -1010,6 +1019,7 @@ fn run_coreaudio_streams(
     let ref_buffer_for_input = Arc::clone(&reference_buffer);
     let fft_proc_clone = Arc::clone(&fft_processor);
     let stats = Arc::clone(&level_stats);
+    let routing_for_input = Arc::clone(&routing);
 
     // Allocated once, up front, sized for the maximum supported channel count
     // so it never needs to grow. Deinterleaving inside the callback below must
@@ -1036,8 +1046,10 @@ fn run_coreaudio_streams(
             fft_proc_clone.lock().process(measurement_data);
 
             // The transfer function needs a reference. Take it without holding
-            // any other lock.
-            let reference: Option<Vec<f32>> = {
+            // any other lock. This is the generator's own output, shared by
+            // every Generator-referenced pair below — an Input-referenced pair
+            // needs none of this and must still be processed if it's empty.
+            let generator_reference: Option<Vec<f32>> = {
                 let mut ref_buf = ref_buffer_for_input.lock();
                 if ref_buf.len() >= frame_len {
                     Some(ref_buf.drain(..frame_len).collect())
@@ -1046,27 +1058,28 @@ fn run_coreaudio_streams(
                 }
             };
 
-            let Some(ref_data) = reference else {
-                stats.lock().update(measurement_data, &[]);
-                return;
-            };
+            stats.lock().update(
+                measurement_data,
+                generator_reference.as_deref().unwrap_or(&[]),
+            );
 
-            stats.lock().update(measurement_data, &ref_data);
-
-            // Route to whichever resolution mode is active. Both processors keep
-            // their own state, so switching modes never loses the other's averages.
+            // Route to whichever resolution mode is active. Multi-window is a
+            // single global high-resolution view of the legacy measurement
+            // channel; the matrix below is every active pair against its own
+            // reference. They keep their own state, so switching modes never
+            // loses the other's averages.
             if mw_enabled.load(Ordering::Relaxed) {
-                mw_processor.lock().process(measurement_data, &ref_data);
-            } else {
-                for (index, processor) in tf_processors
-                    .iter()
-                    .enumerate()
-                    .take(channel_buffers.channel_count())
-                {
-                    processor
-                        .lock()
-                        .process(channel_buffers.channel(index), &ref_data);
+                if let Some(ref_data) = &generator_reference {
+                    mw_processor.lock().process(measurement_data, ref_data);
                 }
+            } else {
+                let routing = routing_for_input.lock().clone();
+                process_active_pairs(
+                    &routing,
+                    &channel_buffers,
+                    &tf_processors,
+                    generator_reference.as_deref(),
+                );
             }
         },
     ) {
@@ -1145,6 +1158,68 @@ fn run_coreaudio_streams(
 
     is_running.store(false, Ordering::Relaxed);
     log::info!("CoreAudio streams stopped");
+}
+
+/// Run one measurement pair's block through its transfer function processor.
+///
+/// Argument order matches `TransferFunctionProcessor::process`: measurement
+/// first, reference second. Swap them and every transfer function computed
+/// through this pair is inverted.
+fn process_pair(
+    processor: &mut TransferFunctionProcessor,
+    measurement: &[f32],
+    reference: &[f32],
+    delay_samples: usize,
+) {
+    // A no-op when the delay hasn't changed since the last block; only resets
+    // averaging (via `reset_averaging`) when it actually moves.
+    processor.set_delay_samples(delay_samples);
+    processor.process(measurement, reference);
+}
+
+/// Runs every active pair in `routing` for one audio block. Shared by both
+/// the CPAL and CoreAudio input callbacks so their per-pair behaviour can
+/// never diverge between backends — that exact divergence has shipped as a
+/// bug in this project before.
+///
+/// `generator_reference` is the block already drained from `reference_buffer`
+/// for this callback (or `None` if the generator hasn't produced enough
+/// samples yet); it is shared by every `Generator`-referenced pair rather
+/// than drained once per pair. `channel_buffers` must already be filled for
+/// this block. Does not allocate.
+fn process_active_pairs(
+    routing: &Routing,
+    channel_buffers: &ChannelBuffers,
+    transfer_function_processors: &[Arc<Mutex<TransferFunctionProcessor>>],
+    generator_reference: Option<&[f32]>,
+) {
+    let channel_count = channel_buffers.channel_count();
+
+    for pair in routing.active_pairs() {
+        if pair.measurement_channel >= channel_count {
+            continue;
+        }
+
+        let reference = match pair.reference {
+            ReferenceSource::Generator => match generator_reference {
+                Some(reference) => reference,
+                // No generator output buffered yet this block — a pair
+                // referenced to the generator simply has nothing to measure
+                // against; other pairs must still be processed.
+                None => continue,
+            },
+            ReferenceSource::Input { channel } => {
+                if channel >= channel_count {
+                    continue;
+                }
+                channel_buffers.channel(channel)
+            }
+        };
+
+        let measurement = channel_buffers.channel(pair.measurement_channel);
+        let mut processor = transfer_function_processors[pair.measurement_channel].lock();
+        process_pair(&mut processor, measurement, reference, pair.delay_samples);
+    }
 }
 
 #[cfg(test)]
@@ -1352,5 +1427,78 @@ mod tests {
             elapsed.as_millis() < 100,
             "100k routing reads took {elapsed:?} — this runs per audio callback"
         );
+    }
+
+    /// A pair referenced to the generator behaves exactly as the single-channel
+    /// path did — this is the regression test for everything that worked before.
+    #[test]
+    fn a_generator_referenced_pair_matches_the_legacy_path() {
+        let fs = 48_000.0f32;
+        let signal: Vec<f32> = (0..4096)
+            .map(|i| (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / fs).sin())
+            .collect();
+
+        let mut legacy = TransferFunctionProcessor::new(2048, fs);
+        legacy.process(&signal, &signal);
+
+        let mut paired = TransferFunctionProcessor::new(2048, fs);
+        process_pair(&mut paired, &signal, &signal, 0);
+
+        let a = legacy.get_data();
+        let b = paired.get_data();
+        assert_eq!(a.magnitude_db.len(), b.magnitude_db.len());
+        for (i, (x, y)) in a.magnitude_db.iter().zip(b.magnitude_db.iter()).enumerate() {
+            assert!((x - y).abs() < 1e-4, "bin {i}: {x} vs {y}");
+        }
+    }
+
+    /// A pair's delay shifts the reference, which is what makes a delayed
+    /// measurement read as flat phase rather than a spiral.
+    #[test]
+    fn a_pair_delay_aligns_a_delayed_measurement() {
+        let fs = 48_000.0f32;
+        let delay = 128usize;
+        let reference: Vec<f32> = (0..8192)
+            .map(|i| ((i * 2654435761usize) as f32).sin()) // deterministic broadband
+            .collect();
+        let mut measurement = vec![0.0f32; reference.len()];
+        measurement[delay..].copy_from_slice(&reference[..reference.len() - delay]);
+
+        let mut aligned = TransferFunctionProcessor::new(2048, fs);
+        process_pair(&mut aligned, &measurement, &reference, delay);
+
+        let data = aligned.get_data();
+        // With the delay compensated, phase in the coherent midband is near zero.
+        let midband: Vec<f32> = data
+            .frequencies
+            .iter()
+            .zip(data.phase_deg.iter())
+            .zip(data.coherence.iter())
+            .filter(|((&f, _), &c)| f > 200.0 && f < 5000.0 && c > 0.9)
+            .map(|((_, &p), _)| p.abs())
+            .collect();
+        assert!(!midband.is_empty(), "no coherent midband to check");
+        let mean = midband.iter().sum::<f32>() / midband.len() as f32;
+        assert!(
+            mean < 20.0,
+            "mean |phase| was {mean:.1} deg, expected near zero"
+        );
+    }
+
+    /// A disabled pair produces no processing at all.
+    #[test]
+    fn a_disabled_pair_is_not_processed() {
+        let routing = Routing {
+            pairs: vec![MeasurementPair {
+                id: "a".into(),
+                name: "Off".into(),
+                measurement_channel: 0,
+                reference: ReferenceSource::Generator,
+                delay_samples: 0,
+                calibration_offset_db: 0.0,
+                enabled: false,
+            }],
+        };
+        assert_eq!(routing.active_pairs().count(), 0);
     }
 }
