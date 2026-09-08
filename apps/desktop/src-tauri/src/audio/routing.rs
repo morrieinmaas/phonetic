@@ -108,7 +108,10 @@ mod tests {
             pairs: vec![pair("a", 9, ReferenceSource::Generator)],
         };
         let error = routing.validate(8).unwrap_err();
-        assert!(error.contains('9'), "the error should name the bad channel: {error}");
+        assert!(
+            error.contains('9'),
+            "the error should name the bad channel: {error}"
+        );
     }
 
     /// Measuring a channel against itself gives a flat trace and perfect
