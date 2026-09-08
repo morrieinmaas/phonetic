@@ -9,6 +9,7 @@ import { SettingsDialog } from "./components/settings-dialog";
 import { SpectrogramDisplay } from "./components/spectrogram-display";
 import { SpectrumAnalyzer } from "./components/spectrum-analyzer";
 import { StatusBar } from "./components/status-bar";
+import { TraceControls } from "./components/trace-controls";
 import { TransferFunctionDisplay } from "./components/transfer-function-display";
 import { ThemeToggle } from "./components/ui/theme-toggle";
 import { WebGLSpectrum } from "./components/webgl-spectrum";
@@ -291,6 +292,9 @@ export const App = () => {
 						onStop={stopGenerator}
 						disabled={!isRunning}
 					/>
+
+					{/* Trace capture, A/B compare, delay apply and spatial averaging */}
+					<TraceControls currentData={transferFunctionData} isRunning={isRunning} />
 
 					{/* Error display */}
 					{error && (
