@@ -14,14 +14,14 @@ const THEME_COLORS = {
 	dark: {
 		background: [0.05, 0.05, 0.08] as const,
 		labelFill: "#e5e5e5",
-		gridStroke: "rgba(255,255,255,0.1)",
+		gridStroke: "rgba(255,255,255,0.22)",
 		containerBg: "bg-[#191922]",
 		peakHold: "#f59e0b",
 	},
 	light: {
 		background: [0.97, 0.97, 0.98] as const,
 		labelFill: "#171717",
-		gridStroke: "rgba(0,0,0,0.15)",
+		gridStroke: "rgba(0,0,0,0.28)",
 		containerBg: "bg-[#eeeef3]",
 		peakHold: "#d97706",
 	},
@@ -538,76 +538,71 @@ export const WebGLSpectrum = ({
 					ref={peakCanvasRef}
 					className="absolute inset-0 w-full h-full pointer-events-none"
 				/>
-				{/* Grid and labels. Positions are computed from the same log-frequency
-				    and dB mappings the renderer uses, so a line always lands on the
-				    value it claims. The previous overlay hardcoded percentages —
-				    1 kHz sat at 40% when a 20 Hz-20 kHz log axis puts it at 57% —
-				    and declared a <pattern> it never referenced, so no grid drew. */}
+				{/* Grid lines in a fixed 0-100 coordinate space, stretched to the plot
+				    by preserveAspectRatio="none". Percentage geometry on a viewBox-less
+				    SVG proved unreliable here; plain numbers in a declared space are
+				    not. non-scaling-stroke keeps the lines 1px however far they stretch.
+				    Positions come from the same mappings the renderer draws with. */}
 				<svg
 					className="pointer-events-none absolute inset-0 h-full w-full"
+					viewBox="0 0 100 100"
 					preserveAspectRatio="none"
 					aria-labelledby="spectrum-grid-title"
 				>
 					<title id="spectrum-grid-title">Spectrum analyzer frequency and amplitude grid</title>
-
-					{GRID_FREQUENCIES.map(({ hz }) => {
-						const x = `${freqToPercent(hz)}%`;
-						return (
-							<line
-								key={`f-${hz}`}
-								x1={x}
-								y1="0"
-								x2={x}
-								y2="100%"
-								stroke={themeColors.gridStroke}
-								strokeWidth="1"
-							/>
-						);
-					})}
-
-					{GRID_DECIBELS.map((db) => {
-						const y = `${dbToPercent(db)}%`;
-						return (
-							<line
-								key={`d-${db}`}
-								x1="0"
-								y1={y}
-								x2="100%"
-								y2={y}
-								stroke={themeColors.gridStroke}
-								strokeWidth="1"
-							/>
-						);
-					})}
-
-					{GRID_FREQUENCIES.filter((f) => f.label).map(({ hz, label }) => (
-						<text
-							key={`fl-${hz}`}
-							x={`${freqToPercent(hz)}%`}
-							y="98%"
-							textAnchor="middle"
-							fill={themeColors.labelFill}
-							fontSize="12"
-							fontWeight="bold"
-						>
-							{label}
-						</text>
+					{GRID_FREQUENCIES.map(({ hz, label }) => (
+						<line
+							key={`f-${hz}`}
+							x1={freqToPercent(hz)}
+							y1={0}
+							x2={freqToPercent(hz)}
+							y2={100}
+							stroke={themeColors.gridStroke}
+							strokeWidth={label ? 1 : 0.5}
+							vectorEffect="non-scaling-stroke"
+						/>
 					))}
-
 					{GRID_DECIBELS.map((db) => (
-						<text
-							key={`dl-${db}`}
-							x="6"
-							y={`${dbToPercent(db)}%`}
-							dy={db === 0 ? "1em" : "-0.35em"}
-							fill={themeColors.labelFill}
-							fontSize="12"
-							fontWeight="bold"
-						>
-							{db === 0 ? "0dB" : String(db)}
-						</text>
+						<line
+							key={`d-${db}`}
+							x1={0}
+							y1={dbToPercent(db)}
+							x2={100}
+							y2={dbToPercent(db)}
+							stroke={themeColors.gridStroke}
+							strokeWidth={1}
+							vectorEffect="non-scaling-stroke"
+						/>
 					))}
 				</svg>
+
+				{/* Labels as positioned HTML rather than SVG text: a stretched
+				    coordinate space would distort glyphs, and HTML text stays crisp. */}
+				<div className="pointer-events-none absolute inset-0">
+					{GRID_FREQUENCIES.filter((f) => f.label).map(({ hz, label }) => (
+						<span
+							key={`fl-${hz}`}
+							className="absolute -translate-x-1/2 text-xs font-bold"
+							style={{ left: `${freqToPercent(hz)}%`, bottom: 2, color: themeColors.labelFill }}
+						>
+							{label}
+						</span>
+					))}
+					{GRID_DECIBELS.map((db) => (
+						<span
+							key={`dl-${db}`}
+							className="absolute text-xs font-bold"
+							style={{
+								left: 6,
+								top: `${dbToPercent(db)}%`,
+								transform: db === 0 ? "translateY(2px)" : "translateY(-50%)",
+								color: themeColors.labelFill,
+							}}
+						>
+							{db === 0 ? "0dB" : String(db)}
+						</span>
+					))}
+				</div>
 				{!isRunning && (
 					<div className="absolute inset-0 flex items-center justify-center text-muted-foreground bg-background/50 z-10">
 						Start audio stream to see spectrum
