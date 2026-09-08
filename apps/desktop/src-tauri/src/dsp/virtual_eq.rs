@@ -29,6 +29,15 @@ pub struct BiquadFilter {
     pub enabled: bool,
 }
 
+/// Q values at or below this are physically meaningless and would divide by
+/// ~zero. Clamped rather than rejected so a malformed filter degrades to a
+/// very wide one instead of failing a whole measurement prediction.
+///
+/// `f32::max` follows IEEE 754 `maxNum` semantics: when either operand is
+/// NaN, the *other* (non-NaN) operand is returned. So `self.q.max(MIN_Q)`
+/// is NaN-safe by construction -- a NaN `q` clamps to `MIN_Q`, never to NaN.
+const MIN_Q: f32 = 0.01;
+
 /// Direct-form biquad coefficients, normalised by a0.
 struct Coefficients {
     b0: f32,
@@ -44,7 +53,7 @@ impl BiquadFilter {
         let a = 10f32.powf(self.gain_db / 40.0);
         let w0 = 2.0 * PI * self.frequency_hz / sample_rate;
         let (sin_w0, cos_w0) = (w0.sin(), w0.cos());
-        let alpha = sin_w0 / (2.0 * self.q.max(0.01));
+        let alpha = sin_w0 / (2.0 * self.q.max(MIN_Q));
 
         let (b0, b1, b2, a0, a1, a2) = match self.filter_type {
             FilterType::Peaking => (

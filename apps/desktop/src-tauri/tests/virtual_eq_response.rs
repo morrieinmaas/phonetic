@@ -16,6 +16,10 @@ fn db(h: realfft::num_complex::Complex<f32>) -> f32 {
     20.0 * h.norm().log10()
 }
 
+fn phase(h: realfft::num_complex::Complex<f32>) -> f32 {
+    h.arg().to_degrees()
+}
+
 /// A peaking filter must deliver exactly its specified gain at its centre frequency.
 #[test]
 fn a_peaking_filter_hits_its_gain_at_centre() {
@@ -38,6 +42,26 @@ fn a_peaking_filter_is_flat_far_from_centre() {
         assert!(
             got.abs() < 1.0,
             "should be flat at {probe} Hz, got {got:+.3} dB"
+        );
+    }
+}
+
+/// A Q at or below the physical floor must clamp to a finite, usable
+/// response rather than blowing up. `alpha = sin(w0) / (2*q)` divides by
+/// `q`, so `q <= 0` (or NaN) must not reach that division unclamped.
+#[test]
+fn invalid_q_clamps_to_a_finite_response() {
+    for bad_q in [0.0_f32, -5.0, f32::NAN] {
+        let f = peaking(1000.0, 12.0, bad_q);
+        let h = f.response_at(1000.0, FS);
+        assert!(
+            h.re.is_finite() && h.im.is_finite(),
+            "q={bad_q} produced a non-finite response: {h:?}"
+        );
+        let got = db(h);
+        assert!(
+            got.is_finite(),
+            "q={bad_q} produced a non-finite magnitude: {got}"
         );
     }
 }
@@ -85,6 +109,65 @@ fn a_low_shelf_reaches_its_gain_at_dc() {
     assert!(
         (got - 6.0).abs() < 0.5,
         "expected +6 dB well below the corner, got {got:.3}"
+    );
+}
+
+/// Shelves reach their gain well past the corner (high shelf: above it).
+#[test]
+fn a_high_shelf_reaches_its_gain_above_corner() {
+    let f = BiquadFilter {
+        filter_type: FilterType::HighShelf,
+        frequency_hz: 2000.0,
+        gain_db: 6.0,
+        q: 0.707,
+        enabled: true,
+    };
+    let got = db(f.response_at(20_000.0, FS));
+    assert!(
+        (got - 6.0).abs() < 0.5,
+        "expected +6 dB well above the corner, got {got:.3}"
+    );
+}
+
+/// A low-pass is -3.01 dB at its corner (Butterworth Q).
+#[test]
+fn a_lowpass_is_three_db_down_at_its_corner() {
+    let f = BiquadFilter {
+        filter_type: FilterType::LowPass,
+        frequency_hz: 1000.0,
+        gain_db: 0.0,
+        q: std::f32::consts::FRAC_1_SQRT_2, // Butterworth
+        enabled: true,
+    };
+    let got = db(f.response_at(1000.0, FS));
+    assert!(
+        (got - -3.01).abs() < 0.15,
+        "expected -3.01 dB at the corner, got {got:.3}"
+    );
+}
+
+/// A low-pass attenuates strongly well above its corner, and is transparent
+/// well below it.
+#[test]
+fn a_lowpass_shapes_the_spectrum_around_its_corner() {
+    let f = BiquadFilter {
+        filter_type: FilterType::LowPass,
+        frequency_hz: 1000.0,
+        gain_db: 0.0,
+        q: std::f32::consts::FRAC_1_SQRT_2,
+        enabled: true,
+    };
+
+    let below = db(f.response_at(50.0, FS));
+    assert!(
+        below.abs() < 0.5,
+        "should be transparent well below the corner, got {below:+.3} dB"
+    );
+
+    let above = db(f.response_at(10_000.0, FS));
+    assert!(
+        above < -30.0,
+        "should attenuate strongly well above the corner, got {above:+.3} dB"
     );
 }
 
@@ -177,5 +260,82 @@ fn prediction_preserves_coherence_untouched() {
     assert_eq!(
         out.coherence, trace.coherence,
         "EQ does not change measurement confidence"
+    );
+}
+
+/// A peaking boost is a minimum-phase bell: phase leads (positive) below
+/// centre and lags (negative) above centre -- the characteristic S-curve.
+/// These probe frequencies and gain/Q reproduce the reviewer's own
+/// worked example (800 Hz -> +14.7931 deg) that a sign error in
+/// `z1 = Complex::new(w.cos(), -w.sin())` would silently invert.
+#[test]
+fn a_peaking_boost_has_the_characteristic_phase_s_curve() {
+    let f = peaking(1000.0, 6.0, 1.0);
+
+    let below = phase(f.response_at(800.0, FS));
+    assert!(
+        below > 0.0,
+        "below centre, phase should lead (be positive), got {below:+.4} deg"
+    );
+    assert!(
+        below.abs() < 90.0,
+        "phase should stay within a sane bound, got {below:+.4} deg"
+    );
+
+    let above = phase(f.response_at(1100.0, FS));
+    assert!(
+        above < 0.0,
+        "above centre, phase should lag (be negative), got {above:+.4} deg"
+    );
+    assert!(
+        above.abs() < 90.0,
+        "phase should stay within a sane bound, got {above:+.4} deg"
+    );
+}
+
+/// At the exact centre frequency, a peaking filter's phase is ~0 deg.
+#[test]
+fn a_peaking_filter_has_zero_phase_at_centre() {
+    let f = peaking(1000.0, 6.0, 1.0);
+    let got = phase(f.response_at(1000.0, FS));
+    assert!(
+        got.abs() < 0.1,
+        "expected ~0 deg at the centre frequency, got {got:+.4} deg"
+    );
+}
+
+/// A Butterworth high-pass leads by ~90 deg at its corner; a Butterworth
+/// low-pass lags by ~90 deg at its corner. This is a 2nd-order (biquad,
+/// 12 dB/oct) filter, so the corner phase is +/-90 deg -- not the +/-45 deg
+/// of a 1st-order (6 dB/oct) RC-style filter. Confirmed independently from
+/// the analog Butterworth prototype H(s) = wc^2 / (s^2 + sqrt(2) wc s + wc^2):
+/// at s = j*wc, H = 1 / (j*sqrt(2)), i.e. -90 deg (and the dual +90 deg for
+/// the high-pass), consistent with the existing -3.01 dB corner magnitude.
+#[test]
+fn butterworth_corner_phase_has_the_expected_sign_and_magnitude() {
+    let hp = BiquadFilter {
+        filter_type: FilterType::HighPass,
+        frequency_hz: 1000.0,
+        gain_db: 0.0,
+        q: std::f32::consts::FRAC_1_SQRT_2,
+        enabled: true,
+    };
+    let hp_phase = phase(hp.response_at(1000.0, FS));
+    assert!(
+        (hp_phase - 90.0).abs() < 1.0,
+        "expected ~+90 deg at the high-pass corner, got {hp_phase:+.4} deg"
+    );
+
+    let lp = BiquadFilter {
+        filter_type: FilterType::LowPass,
+        frequency_hz: 1000.0,
+        gain_db: 0.0,
+        q: std::f32::consts::FRAC_1_SQRT_2,
+        enabled: true,
+    };
+    let lp_phase = phase(lp.response_at(1000.0, FS));
+    assert!(
+        (lp_phase - -90.0).abs() < 1.0,
+        "expected ~-90 deg at the low-pass corner, got {lp_phase:+.4} deg"
     );
 }
