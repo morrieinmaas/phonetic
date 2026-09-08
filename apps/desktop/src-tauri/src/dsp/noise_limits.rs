@@ -30,13 +30,19 @@
 //! low frequencies, where A and C weighting diverge most and impulsive
 //! peaks often carry their energy.
 //!
-//! CAVEAT: `lcpeak_db`/`laeq_db` etc. are dBFS (full scale = 1.0, see
-//! `dsp::leq`'s module doc), not calibrated SPL -- `LeqMeter` never touches
-//! `dsp::calibration::SplCalculator`, which is wired to separate spectrum
-//! commands only. The directive's ceilings are `re 20 uPa` absolute SPL. So
-//! this comparison (like the pre-existing `laeq_limit_db` one) is only
-//! meaningful once the input to `LeqMeter::push` is calibrated SPL, not raw
-//! samples -- a wiring task, not one this module can fix on its own.
+//! `LeqMeter`'s `laeq_db`/`lcpeak_db` etc. are dBFS (full scale = 1.0, see
+//! `dsp::leq`'s module doc), not calibrated SPL, while the directive's
+//! ceilings are `re 20 uPa` absolute SPL -- two incompatible units that must
+//! never be compared directly. `dose` (below) closes that gap itself rather
+//! than trusting a caller to remember it: it takes a `&SplCalculator` and
+//! runs both `laeq_db` and `lcpeak_db` through `SplCalculator::dbfs_to_spl`
+//! before comparing against `laeq_limit_db`/`lcpeak_limit_db`, so a caller
+//! cannot pass raw dBFS by omission the way a documented precondition (or an
+//! optional `to_spl()` helper) would allow. The conversion is exact:
+//! `dbfs_to_spl` adds a constant offset, and adding a constant to a level
+//! commutes with energy averaging, so applying it once at comparison time is
+//! identical to applying it per sample before the LEQ integrator ever sees
+//! it.
 //!
 //! The single source of truth for the built-in data is
 //! `resources/noise_limits.json`, embedded at compile time so `builtin()`
@@ -46,7 +52,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use super::LeqMetrics;
+use super::{LeqMetrics, SplCalculator};
 
 /// One noise-exposure preset. Crosses the Rust/TS boundary in a later task
 /// -- field names stay snake_case, never add
@@ -132,14 +138,19 @@ pub struct DoseResult {
 }
 
 /// Exposure energy against `limit`'s energy over its reference period:
-/// `percent = 100 * (T_elapsed / T_ref) * 10^((LAeq - L_limit) / 10)`.
+/// `percent = 100 * (T_elapsed / T_ref) * 10^((LAeq_SPL - L_limit) / 10)`,
+/// where `LAeq_SPL = spl.dbfs_to_spl(metrics.laeq_db)` -- see the module doc
+/// for why the calculator is a required argument rather than a precondition.
 ///
 /// This is an energy (not level) relationship, so 3 dB over the limit
 /// doubles the dose and exactly-at-the-limit-for-the-full-reference-period
 /// is exactly 100%.
-pub fn dose(metrics: &LeqMetrics, limit: &NoiseLimit) -> DoseResult {
+pub fn dose(metrics: &LeqMetrics, limit: &NoiseLimit, spl: &SplCalculator) -> DoseResult {
+    let laeq_spl_db = spl.dbfs_to_spl(metrics.laeq_db);
+    let lcpeak_spl_db = spl.dbfs_to_spl(metrics.lcpeak_db);
+
     let reference_seconds = limit.reference_hours * 3600.0;
-    let energy_ratio = 10f64.powf((metrics.laeq_db as f64 - limit.laeq_limit_db as f64) / 10.0);
+    let energy_ratio = 10f64.powf((laeq_spl_db as f64 - limit.laeq_limit_db as f64) / 10.0);
 
     let percent = if reference_seconds > 0.0 {
         100.0 * (metrics.elapsed_seconds / reference_seconds) * energy_ratio
@@ -155,7 +166,7 @@ pub fn dose(metrics: &LeqMetrics, limit: &NoiseLimit) -> DoseResult {
 
     let peak_exceeded = limit
         .lcpeak_limit_db
-        .is_some_and(|ceiling| metrics.lcpeak_db > ceiling);
+        .is_some_and(|ceiling| lcpeak_spl_db > ceiling);
 
     DoseResult {
         percent,
@@ -166,6 +177,7 @@ pub fn dose(metrics: &LeqMetrics, limit: &NoiseLimit) -> DoseResult {
 
 #[cfg(test)]
 mod tests {
+    use super::super::MicrophoneCalibration;
     use super::*;
 
     fn metrics_with(laeq: f32, elapsed_seconds: f64) -> LeqMetrics {
@@ -192,6 +204,16 @@ mod tests {
             lcpeak_db,
             elapsed_seconds: 0.0,
         }
+    }
+
+    /// An `SplCalculator` with a zero dBFS -> SPL offset (`dbfs_to_spl(x) ==
+    /// x`), so tests that predate calibration being wired into `dose` can
+    /// keep comparing the same numbers on both sides of the limit instead of
+    /// being rewritten around an arbitrary non-zero constant. Note this is
+    /// NOT `SplCalculator::default()` -- its default calibration
+    /// (-40 dB sensitivity, 94 dB reference) has a +134 dB offset, not zero.
+    fn identity_spl() -> SplCalculator {
+        SplCalculator::new(MicrophoneCalibration::new("Identity", 0.0, 0.0))
     }
 
     /// Every shipped preset is sourced and dated. A preset without both is a
@@ -228,7 +250,7 @@ mod tests {
             lcpeak_limit_db: None,
         };
         let metrics = metrics_with(85.0, 8.0 * 3600.0);
-        let d = dose(&metrics, &limit);
+        let d = dose(&metrics, &limit, &identity_spl());
         assert!((d.percent - 100.0).abs() < 0.1, "got {:.2}%", d.percent);
     }
 
@@ -245,8 +267,8 @@ mod tests {
             reference_hours: 8.0,
             lcpeak_limit_db: None,
         };
-        let at = dose(&metrics_with(85.0, 3600.0), &limit).percent;
-        let over = dose(&metrics_with(88.0, 3600.0), &limit).percent;
+        let at = dose(&metrics_with(85.0, 3600.0), &limit, &identity_spl()).percent;
+        let over = dose(&metrics_with(88.0, 3600.0), &limit, &identity_spl()).percent;
         assert!((over / at - 2.0).abs() < 0.02, "ratio {:.4}", over / at);
     }
 
@@ -315,16 +337,104 @@ mod tests {
             lcpeak_limit_db: Some(135.0),
         };
 
-        let loud = dose(&metrics_with_lcpeak(140.0), &limit);
+        let loud = dose(&metrics_with_lcpeak(140.0), &limit, &identity_spl());
         assert!(
             loud.peak_exceeded,
             "140 dB LCpeak should exceed a 135 dB ceiling"
         );
 
-        let quiet = dose(&metrics_with_lcpeak(100.0), &limit);
+        let quiet = dose(&metrics_with_lcpeak(100.0), &limit, &identity_spl());
         assert!(
             !quiet.peak_exceeded,
             "100 dB LCpeak should not exceed a 135 dB ceiling"
+        );
+    }
+
+    /// Regression test for the dBFS/SPL unit-mismatch bug (see module doc):
+    /// comparing raw dBFS against an absolute-SPL limit makes a realistic
+    /// -20 dBFS measurement read as a ~3.95e-10% dose -- effectively always
+    /// 0%, no matter how loud the room actually is. With a realistic
+    /// calibration applied, the same measurement must read as a clearly
+    /// non-zero, sensible dose.
+    #[test]
+    fn a_loud_measurement_produces_a_sensible_nonzero_dose_with_realistic_calibration() {
+        let limit = NoiseLimit {
+            id: "test".into(),
+            name: "Test".into(),
+            source: "test".into(),
+            as_of: "2026-01-01".into(),
+            laeq_limit_db: 85.0,
+            reference_hours: 8.0,
+            lcpeak_limit_db: None,
+        };
+        let spl = SplCalculator::default();
+        // -20 dBFS: a realistic recording level, well below clipping.
+        let metrics = metrics_with(-20.0, 3600.0);
+
+        let d = dose(&metrics, &limit, &spl);
+
+        assert!(
+            d.percent > 1.0,
+            "a loud -20 dBFS measurement should read a clearly non-zero dose, got {:.10}%",
+            d.percent
+        );
+    }
+
+    /// Proves the calculator is genuinely consulted, not accepted and
+    /// ignored: the same dBFS input under two calibrations with a 10 dB
+    /// sensitivity difference must produce different doses.
+    #[test]
+    fn changing_the_calibration_changes_the_dose_for_the_same_dbfs_input() {
+        let limit = NoiseLimit {
+            id: "test".into(),
+            name: "Test".into(),
+            source: "test".into(),
+            as_of: "2026-01-01".into(),
+            laeq_limit_db: 85.0,
+            reference_hours: 8.0,
+            lcpeak_limit_db: None,
+        };
+        let metrics = metrics_with(-20.0, 3600.0);
+
+        let less_sensitive = SplCalculator::new(MicrophoneCalibration::new("A", -40.0, 94.0));
+        let more_sensitive = SplCalculator::new(MicrophoneCalibration::new("B", -30.0, 94.0));
+
+        let dose_a = dose(&metrics, &limit, &less_sensitive).percent;
+        let dose_b = dose(&metrics, &limit, &more_sensitive).percent;
+
+        assert!(
+            (dose_a - dose_b).abs() > 1.0,
+            "identical dBFS input under different calibrations should give different doses: {dose_a:.4}% vs {dose_b:.4}%"
+        );
+    }
+
+    /// The peak comparison must respect calibration too, not just the LAeq
+    /// dose -- same bug, same fix, same requirement to prove it.
+    #[test]
+    fn the_peak_comparison_also_respects_calibration() {
+        let limit = NoiseLimit {
+            id: "test".into(),
+            name: "Test".into(),
+            source: "test".into(),
+            as_of: "2026-01-01".into(),
+            laeq_limit_db: 85.0,
+            reference_hours: 8.0,
+            lcpeak_limit_db: Some(135.0),
+        };
+        // Default calibration (-40 dB sensitivity, 94 dB reference) has a
+        // +134 dB dBFS->SPL offset.
+        let spl = SplCalculator::default();
+
+        let below_ceiling = dose(&metrics_with_lcpeak(-5.0), &limit, &spl); // -5 + 134 = 129 dB SPL
+        assert!(
+            !below_ceiling.peak_exceeded,
+            "129 dB SPL should not exceed a 135 dB ceiling"
+        );
+
+        let above_ceiling = dose(&metrics_with_lcpeak(2.0), &limit, &spl); // 2 + 134 = 136 dB SPL
+        assert!(
+            above_ceiling.peak_exceeded,
+            "136 dB SPL should exceed a 135 dB ceiling"
         );
     }
 }
