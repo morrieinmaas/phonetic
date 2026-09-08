@@ -170,7 +170,7 @@ export const App = () => {
 	const generatorActive = audioState?.generator_active ?? false;
 
 	return (
-		<div className="flex min-h-screen flex-col bg-background text-foreground">
+		<div className="flex h-screen overflow-hidden flex-col bg-background text-foreground">
 			{/* Header */}
 			<header className="glass sticky top-0 z-50 flex h-14 items-center justify-between border-b px-4">
 				<h1 className="gradient-text text-xl font-bold tracking-tight">Phonetic</h1>
@@ -202,6 +202,12 @@ export const App = () => {
 					<ThemeToggle theme={theme} onToggle={toggleTheme} />
 				</div>
 			</header>
+
+			{/* Rig diagnoses sit above the measurement area: they appear and vanish
+			    on a poll, and below the status bar they shoved the footer around. */}
+			<div className="flex-shrink-0 px-4 pt-4 empty:hidden">
+				<DiagnosticsBanner />
+			</div>
 
 			{/* Main content */}
 			<main className="flex flex-1 gap-4 p-4 min-h-0">
@@ -391,7 +397,6 @@ export const App = () => {
 
 			{/* Footer status bar */}
 			<StatusBar audioState={audioState} error={error} />
-			<DiagnosticsBanner />
 
 			{/* Settings dialog */}
 			<SettingsDialog
