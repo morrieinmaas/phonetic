@@ -76,6 +76,7 @@ export const TraceControls = ({ currentData, isRunning }: TraceControlsProps) =>
 						<button
 							key={slot}
 							type="button"
+							data-testid={slot === "A" ? "capture-trace" : undefined}
 							onClick={() => handleSlotClick(slot)}
 							disabled={!hasTrace && !canCapture}
 							title={
@@ -178,7 +179,7 @@ export const TraceControls = ({ currentData, isRunning }: TraceControlsProps) =>
 									Clear All
 								</button>
 							</div>
-							<div className="max-h-48 overflow-y-auto">
+							<div data-testid="trace-list" className="max-h-48 overflow-y-auto">
 								{traces.map((trace) => (
 									<div
 										key={trace.id}

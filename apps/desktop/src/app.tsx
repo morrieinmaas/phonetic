@@ -180,6 +180,7 @@ export const App = () => {
 					<SessionControls />
 					<button
 						type="button"
+						data-testid="settings-open"
 						onClick={() => setSettingsOpen(true)}
 						className="p-2 rounded-md hover:bg-muted transition-colors"
 						aria-label="Open settings"
@@ -218,6 +219,7 @@ export const App = () => {
 							<>
 								<DeviceSelector
 									label="Input"
+									testId="input-device-select"
 									devices={devices.inputs}
 									selectedDeviceId={selectedInputDevice}
 									defaultDeviceId={devices.default_input}

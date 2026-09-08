@@ -23,7 +23,10 @@ export const StatusBar = ({ audioState, error }: StatusBarProps) => {
 	const latency = sampleRate > 0 ? ((bufferSize / sampleRate) * 1000).toFixed(1) : "--";
 
 	return (
-		<footer className="glass flex h-8 items-center justify-between border-t px-4 text-xs">
+		<footer
+			data-testid="status-bar"
+			className="glass flex h-8 items-center justify-between border-t px-4 text-xs"
+		>
 			{/* Left section - Status indicators */}
 			<div className="flex items-center gap-4">
 				<div className="flex items-center gap-1.5">

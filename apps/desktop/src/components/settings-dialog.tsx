@@ -121,7 +121,10 @@ export const SettingsDialog = ({
 			/>
 
 			{/* Dialog */}
-			<div className="relative glass rounded-lg border border-border shadow-xl w-full max-w-md mx-4">
+			<div
+				data-testid="settings-dialog"
+				className="relative glass rounded-lg border border-border shadow-xl w-full max-w-md mx-4"
+			>
 				{/* Header */}
 				<div className="flex items-center justify-between p-4 border-b border-border">
 					<h2 className="text-lg font-semibold">Settings</h2>
@@ -228,15 +231,17 @@ export const SettingsDialog = ({
 					<fieldset className="space-y-2">
 						<legend className="text-sm font-medium text-foreground">FFT Size</legend>
 						<p className="text-xs text-muted-foreground mb-2">
-							Larger = better frequency resolution, slower updates. Current: {selectedFftSize} bins
-							({audioState ? ((audioState.sample_rate / selectedFftSize) * 1000).toFixed(1) : "?"}{" "}
-							ms window)
+							Larger = better frequency resolution, slower updates. Current:{" "}
+							<span data-testid="fft-size-current">{selectedFftSize}</span> bins (
+							{audioState ? ((audioState.sample_rate / selectedFftSize) * 1000).toFixed(1) : "?"} ms
+							window)
 						</p>
-						<div className="grid grid-cols-3 gap-2">
+						<div data-testid="fft-size-select" className="grid grid-cols-3 gap-2">
 							{FFT_SIZES.map((size) => (
 								<button
 									type="button"
 									key={size}
+									data-testid={`fft-size-${size}`}
 									onClick={() => handleFftSizeChange(size)}
 									disabled={isSaving}
 									className={`px-3 py-2 text-sm rounded-md border transition-colors ${

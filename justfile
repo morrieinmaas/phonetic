@@ -129,6 +129,10 @@ test-ts:
 test-rust:
     cd {{tauri}} && cargo test
 
+# Run just the measurement accuracy suite (see README's Measurement Accuracy section)
+test-accuracy:
+    cd {{tauri}} && cargo test --test dsp_accuracy -- --nocapture
+
 # Run all tests
 test: test-ts test-rust
 
@@ -147,6 +151,13 @@ test-rust-coverage:
 # Run TypeScript tests with coverage
 test-ts-coverage:
     bun test --coverage || echo "No TypeScript tests found"
+
+# Run the end-to-end suite (requires a release build)
+test-e2e: build-release
+    cd apps/desktop && bun run test:e2e
+
+# Everything: unit, integration, accuracy, e2e
+test-all: test test-accuracy test-e2e
 
 # ============================================================================
 # Distribution
