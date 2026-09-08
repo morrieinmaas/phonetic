@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { DeviceSelector } from "./components/device-selector";
 import { GeneratorControls } from "./components/generator-controls";
 import { PermissionDialog } from "./components/permission-dialog";
+import { SessionControls } from "./components/session-controls";
 import { SettingsDialog } from "./components/settings-dialog";
 import { SpectrogramDisplay } from "./components/spectrogram-display";
 import { SpectrumAnalyzer } from "./components/spectrum-analyzer";
@@ -175,6 +176,7 @@ export const App = () => {
 			<header className="glass sticky top-0 z-50 flex h-14 items-center justify-between border-b px-4">
 				<h1 className="gradient-text text-xl font-bold tracking-tight">Phonetic</h1>
 				<div className="flex items-center gap-2">
+					<SessionControls />
 					<button
 						type="button"
 						onClick={() => setSettingsOpen(true)}
