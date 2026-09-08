@@ -1,0 +1,440 @@
+//! Noise-limit presets and exposure dose.
+//!
+//! Phonetic ships *presets*, not a legal database. It must never present a
+//! limit as authoritative: every shipped preset carries a non-empty
+//! `source` citation and an `as_of` date, and if a number cannot be cited it
+//! does not ship (see `every_builtin_limit_is_sourced_and_dated` below).
+//!
+//! The two built-in presets are the EU Physical Agents (Noise) Directive
+//! 2003/10/EC lower and upper exposure action values (Article 3(1)(c) and
+//! 3(1)(b): LEX,8h = 80 dB(A) and 85 dB(A), each over an 8-hour reference
+//! period per the Article 2 definition of LEX,8h). Both were verified
+//! against two independent renderings of the directive text -- EUR-Lex
+//! (<https://eur-lex.europa.eu/legal-content/EN/TXT/PDF/?uri=CELEX%3A02003L0010-20190726>)
+//! and legislation.gov.uk's consolidated copy
+//! (<https://www.legislation.gov.uk/eudr/2003/10/article/3/data.htm?view=plain>)
+//! -- which agree exactly. The directive's *third* value, the 87 dB(A)
+//! exposure limit value, is deliberately not shipped: it is equally
+//! well-sourced, but the brief names only the two action values as presets,
+//! and a preset nobody asked for is exactly the kind of unrequested
+//! addition this project avoids.
+//!
+//! `lcpeak_limit_db` is populated on both built-ins with the directive's
+//! C-weighted peak ceilings (112 Pa / 140 Pa, i.e. 135.0 / 136.9 dB(C) via
+//! 20*log10(p / 20 uPa re 20 uPa) -- confirmed C-weighted by the same two
+//! sources, see Article 2's definition of `ppeak`). `LeqMetrics` carries a
+//! separate `lcpeak_db` fed by `LeqMeter`'s own C-weighted filter instance
+//! (see `dsp::leq`) specifically so this comparison is metric-for-metric
+//! correct -- comparing the directive's LCpeak against this app's
+//! (A-weighted) `lapeak_db` would silently under-report peak exceedance at
+//! low frequencies, where A and C weighting diverge most and impulsive
+//! peaks often carry their energy.
+//!
+//! `LeqMeter`'s `laeq_db`/`lcpeak_db` etc. are dBFS (full scale = 1.0, see
+//! `dsp::leq`'s module doc), not calibrated SPL, while the directive's
+//! ceilings are `re 20 uPa` absolute SPL -- two incompatible units that must
+//! never be compared directly. `dose` (below) closes that gap itself rather
+//! than trusting a caller to remember it: it takes a `&SplCalculator` and
+//! runs both `laeq_db` and `lcpeak_db` through `SplCalculator::dbfs_to_spl`
+//! before comparing against `laeq_limit_db`/`lcpeak_limit_db`, so a caller
+//! cannot pass raw dBFS by omission the way a documented precondition (or an
+//! optional `to_spl()` helper) would allow. The conversion is exact:
+//! `dbfs_to_spl` adds a constant offset, and adding a constant to a level
+//! commutes with energy averaging, so applying it once at comparison time is
+//! identical to applying it per sample before the LEQ integrator ever sees
+//! it.
+//!
+//! The single source of truth for the built-in data is
+//! `resources/noise_limits.json`, embedded at compile time so `builtin()`
+//! and `load()` share one parser and can never drift apart.
+
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+
+use super::{LeqMetrics, SplCalculator};
+
+/// One noise-exposure preset. Crosses the Rust/TS boundary in a later task
+/// -- field names stay snake_case, never add
+/// `#[serde(rename_all = "camelCase")]`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NoiseLimit {
+    pub id: String,
+    pub name: String,
+    /// Required, non-empty: instrument, article/section, date. Never a vague
+    /// "EU directive".
+    pub source: String,
+    /// Required, ISO date: when the cited value was verified correct.
+    pub as_of: String,
+    pub laeq_limit_db: f32,
+    pub reference_hours: f64,
+    pub lcpeak_limit_db: Option<f32>,
+}
+
+/// A collection of presets, loadable from and savable to a plain JSON array
+/// on disk (not wrapped in an object -- an empty file is simply `[]`).
+#[derive(Debug, Clone, Default)]
+pub struct LimitSet {
+    pub limits: Vec<NoiseLimit>,
+}
+
+/// The built-in preset data, embedded at compile time so `builtin()` can
+/// never see a different dataset than a maintainer editing the JSON file.
+const BUILTIN_LIMITS_JSON: &str = include_str!("../../resources/noise_limits.json");
+
+impl LimitSet {
+    /// Loads a limit set from a plain JSON array on disk. A malformed file
+    /// is always an error -- an operator who edited their limits and made a
+    /// typo must find out, never fall back to the built-ins and measure
+    /// against numbers they did not choose. An empty array is legitimately
+    /// empty and loads successfully with zero limits.
+    pub fn load(path: &Path) -> Result<Self, String> {
+        let contents = std::fs::read_to_string(path)
+            .map_err(|err| format!("cannot read limits file at {}: {err}", path.display()))?;
+        Self::parse(&contents)
+            .map_err(|err| format!("malformed limits file at {}: {err}", path.display()))
+    }
+
+    /// Writes the set to disk as a plain JSON array, preserving every field
+    /// -- including `source` and `as_of` -- so an edited dataset never
+    /// silently loses its citations.
+    pub fn save(&self, path: &Path) -> Result<(), String> {
+        let json = serde_json::to_string_pretty(&self.limits)
+            .map_err(|err| format!("cannot serialize limits: {err}"))?;
+        std::fs::write(path, json)
+            .map_err(|err| format!("cannot write limits file at {}: {err}", path.display()))
+    }
+
+    /// The shipped presets -- see the module doc comment for their sources.
+    pub fn builtin() -> Self {
+        Self::parse(BUILTIN_LIMITS_JSON).expect("resources/noise_limits.json must parse")
+    }
+
+    fn parse(contents: &str) -> Result<Self, String> {
+        let limits: Vec<NoiseLimit> =
+            serde_json::from_str(contents).map_err(|err| err.to_string())?;
+        Ok(Self { limits })
+    }
+}
+
+/// The result of comparing a measurement against a limit's reference period.
+/// Crosses the Rust/TS boundary in a later task -- snake_case, never
+/// `rename_all = "camelCase"`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct DoseResult {
+    /// Exposure dose accumulated so far, as a percentage of the limit's
+    /// full-reference-period energy budget. 100% means the limit's energy
+    /// has been used up.
+    pub percent: f64,
+    /// What `percent` would be if the current LAeq held for the entire
+    /// reference period, i.e. the dose rate projected forward rather than
+    /// scaled by elapsed time so far.
+    pub projected_percent_at_reference: f64,
+    /// Whether the measured C-weighted peak exceeded the limit's peak
+    /// ceiling. Always `false` when the limit has no peak ceiling
+    /// (`lcpeak_limit_db` is `None`) -- absence of a limit is not evidence
+    /// of compliance, just absence of a claim.
+    pub peak_exceeded: bool,
+}
+
+/// Exposure energy against `limit`'s energy over its reference period:
+/// `percent = 100 * (T_elapsed / T_ref) * 10^((LAeq_SPL - L_limit) / 10)`,
+/// where `LAeq_SPL = spl.dbfs_to_spl(metrics.laeq_db)` -- see the module doc
+/// for why the calculator is a required argument rather than a precondition.
+///
+/// This is an energy (not level) relationship, so 3 dB over the limit
+/// doubles the dose and exactly-at-the-limit-for-the-full-reference-period
+/// is exactly 100%.
+pub fn dose(metrics: &LeqMetrics, limit: &NoiseLimit, spl: &SplCalculator) -> DoseResult {
+    let laeq_spl_db = spl.dbfs_to_spl(metrics.laeq_db);
+    let lcpeak_spl_db = spl.dbfs_to_spl(metrics.lcpeak_db);
+
+    let reference_seconds = limit.reference_hours * 3600.0;
+    let energy_ratio = 10f64.powf((laeq_spl_db as f64 - limit.laeq_limit_db as f64) / 10.0);
+
+    let percent = if reference_seconds > 0.0 {
+        100.0 * (metrics.elapsed_seconds / reference_seconds) * energy_ratio
+    } else {
+        0.0
+    };
+
+    let projected_percent_at_reference = if metrics.elapsed_seconds > 0.0 {
+        100.0 * energy_ratio
+    } else {
+        0.0
+    };
+
+    let peak_exceeded = limit
+        .lcpeak_limit_db
+        .is_some_and(|ceiling| lcpeak_spl_db > ceiling);
+
+    DoseResult {
+        percent,
+        projected_percent_at_reference,
+        peak_exceeded,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::MicrophoneCalibration;
+    use super::*;
+
+    fn metrics_with(laeq: f32, elapsed_seconds: f64) -> LeqMetrics {
+        LeqMetrics {
+            leq_db: laeq,
+            laeq_db: laeq,
+            lceq_db: laeq,
+            lafmax_db: laeq,
+            lapeak_db: laeq,
+            lcpeak_db: laeq,
+            elapsed_seconds,
+        }
+    }
+
+    /// Builds metrics with an independent LCpeak, for peak-limit tests where
+    /// the LAeq dose fields are irrelevant.
+    fn metrics_with_lcpeak(lcpeak_db: f32) -> LeqMetrics {
+        LeqMetrics {
+            leq_db: 0.0,
+            laeq_db: 0.0,
+            lceq_db: 0.0,
+            lafmax_db: 0.0,
+            lapeak_db: 0.0,
+            lcpeak_db,
+            elapsed_seconds: 0.0,
+        }
+    }
+
+    /// An `SplCalculator` with a zero dBFS -> SPL offset (`dbfs_to_spl(x) ==
+    /// x`), so tests that predate calibration being wired into `dose` can
+    /// keep comparing the same numbers on both sides of the limit instead of
+    /// being rewritten around an arbitrary non-zero constant. Note this is
+    /// NOT `SplCalculator::default()` -- its default calibration
+    /// (-40 dB sensitivity, 94 dB reference) has a +134 dB offset, not zero.
+    fn identity_spl() -> SplCalculator {
+        SplCalculator::new(MicrophoneCalibration::new("Identity", 0.0, 0.0))
+    }
+
+    /// Every shipped preset is sourced and dated. A preset without both is a
+    /// number presented as authority, which this plan forbids.
+    #[test]
+    fn every_builtin_limit_is_sourced_and_dated() {
+        let set = LimitSet::builtin();
+        assert!(!set.limits.is_empty(), "no presets at all");
+        for limit in &set.limits {
+            assert!(
+                !limit.source.trim().is_empty(),
+                "{} has no source",
+                limit.name
+            );
+            assert!(
+                limit.as_of.len() >= 4 && limit.as_of.chars().next().unwrap().is_ascii_digit(),
+                "{} has no usable as_of date: {:?}",
+                limit.name,
+                limit.as_of
+            );
+        }
+    }
+
+    /// Exactly at the limit for exactly the reference period is 100% dose.
+    #[test]
+    fn at_the_limit_for_the_reference_period_is_full_dose() {
+        let limit = NoiseLimit {
+            id: "test".into(),
+            name: "Test".into(),
+            source: "test".into(),
+            as_of: "2026-01-01".into(),
+            laeq_limit_db: 85.0,
+            reference_hours: 8.0,
+            lcpeak_limit_db: None,
+        };
+        let metrics = metrics_with(85.0, 8.0 * 3600.0);
+        let d = dose(&metrics, &limit, &identity_spl());
+        assert!((d.percent - 100.0).abs() < 0.1, "got {:.2}%", d.percent);
+    }
+
+    /// 3 dB over the limit doubles the dose — the energy relationship that
+    /// makes an exchange-rate error visible.
+    #[test]
+    fn three_db_over_doubles_the_dose() {
+        let limit = NoiseLimit {
+            id: "test".into(),
+            name: "Test".into(),
+            source: "test".into(),
+            as_of: "2026-01-01".into(),
+            laeq_limit_db: 85.0,
+            reference_hours: 8.0,
+            lcpeak_limit_db: None,
+        };
+        let at = dose(&metrics_with(85.0, 3600.0), &limit, &identity_spl()).percent;
+        let over = dose(&metrics_with(88.0, 3600.0), &limit, &identity_spl()).percent;
+        assert!((over / at - 2.0).abs() < 0.02, "ratio {:.4}", over / at);
+    }
+
+    /// A round trip through disk preserves every field, including the source
+    /// and date, so an edited dataset does not silently lose its citations.
+    #[test]
+    fn a_saved_limit_set_round_trips_with_its_citations() {
+        let mut path = std::env::temp_dir();
+        path.push(format!("phonetic-limits-{}.json", std::process::id()));
+
+        let original = LimitSet::builtin();
+        original.save(&path).unwrap();
+        let loaded = LimitSet::load(&path).unwrap();
+
+        assert_eq!(loaded.limits.len(), original.limits.len());
+        for (a, b) in original.limits.iter().zip(loaded.limits.iter()) {
+            assert_eq!(a.source, b.source);
+            assert_eq!(a.as_of, b.as_of);
+            assert!((a.laeq_limit_db - b.laeq_limit_db).abs() < 1e-6);
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A malformed file is an error naming the problem, not a silent fallback
+    /// to built-ins — an operator who edited their limits and made a typo must
+    /// find out, not measure against numbers they did not choose.
+    #[test]
+    fn a_malformed_limit_file_is_an_error_not_a_silent_fallback() {
+        let mut path = std::env::temp_dir();
+        path.push(format!("phonetic-limits-bad-{}.json", std::process::id()));
+        std::fs::write(&path, "{ not json").unwrap();
+
+        let result = LimitSet::load(&path);
+        assert!(
+            result.is_err(),
+            "malformed file loaded as {:?}",
+            result.map(|s| s.limits.len())
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// An empty JSON array is legitimately empty, not malformed: an operator
+    /// who deletes every preset should get zero limits, not an error.
+    #[test]
+    fn an_empty_array_loads_as_zero_limits_not_an_error() {
+        let mut path = std::env::temp_dir();
+        path.push(format!("phonetic-limits-empty-{}.json", std::process::id()));
+        std::fs::write(&path, "[]").unwrap();
+
+        let loaded = LimitSet::load(&path).unwrap();
+        assert!(loaded.limits.is_empty());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A limit with a peak ceiling is exceeded by a loud enough LCpeak and
+    /// not by a quiet one -- the comparison `lcpeak_limit_db` exists to make.
+    #[test]
+    fn a_peak_limit_is_exceeded_by_a_loud_peak_and_not_a_quiet_one() {
+        let limit = NoiseLimit {
+            id: "test".into(),
+            name: "Test".into(),
+            source: "test".into(),
+            as_of: "2026-01-01".into(),
+            laeq_limit_db: 85.0,
+            reference_hours: 8.0,
+            lcpeak_limit_db: Some(135.0),
+        };
+
+        let loud = dose(&metrics_with_lcpeak(140.0), &limit, &identity_spl());
+        assert!(
+            loud.peak_exceeded,
+            "140 dB LCpeak should exceed a 135 dB ceiling"
+        );
+
+        let quiet = dose(&metrics_with_lcpeak(100.0), &limit, &identity_spl());
+        assert!(
+            !quiet.peak_exceeded,
+            "100 dB LCpeak should not exceed a 135 dB ceiling"
+        );
+    }
+
+    /// Regression test for the dBFS/SPL unit-mismatch bug (see module doc):
+    /// comparing raw dBFS against an absolute-SPL limit makes a realistic
+    /// -20 dBFS measurement read as a ~3.95e-10% dose -- effectively always
+    /// 0%, no matter how loud the room actually is. With a realistic
+    /// calibration applied, the same measurement must read as a clearly
+    /// non-zero, sensible dose.
+    #[test]
+    fn a_loud_measurement_produces_a_sensible_nonzero_dose_with_realistic_calibration() {
+        let limit = NoiseLimit {
+            id: "test".into(),
+            name: "Test".into(),
+            source: "test".into(),
+            as_of: "2026-01-01".into(),
+            laeq_limit_db: 85.0,
+            reference_hours: 8.0,
+            lcpeak_limit_db: None,
+        };
+        let spl = SplCalculator::default();
+        // -20 dBFS: a realistic recording level, well below clipping.
+        let metrics = metrics_with(-20.0, 3600.0);
+
+        let d = dose(&metrics, &limit, &spl);
+
+        assert!(
+            d.percent > 1.0,
+            "a loud -20 dBFS measurement should read a clearly non-zero dose, got {:.10}%",
+            d.percent
+        );
+    }
+
+    /// Proves the calculator is genuinely consulted, not accepted and
+    /// ignored: the same dBFS input under two calibrations with a 10 dB
+    /// sensitivity difference must produce different doses.
+    #[test]
+    fn changing_the_calibration_changes_the_dose_for_the_same_dbfs_input() {
+        let limit = NoiseLimit {
+            id: "test".into(),
+            name: "Test".into(),
+            source: "test".into(),
+            as_of: "2026-01-01".into(),
+            laeq_limit_db: 85.0,
+            reference_hours: 8.0,
+            lcpeak_limit_db: None,
+        };
+        let metrics = metrics_with(-20.0, 3600.0);
+
+        let less_sensitive = SplCalculator::new(MicrophoneCalibration::new("A", -40.0, 94.0));
+        let more_sensitive = SplCalculator::new(MicrophoneCalibration::new("B", -30.0, 94.0));
+
+        let dose_a = dose(&metrics, &limit, &less_sensitive).percent;
+        let dose_b = dose(&metrics, &limit, &more_sensitive).percent;
+
+        assert!(
+            (dose_a - dose_b).abs() > 1.0,
+            "identical dBFS input under different calibrations should give different doses: {dose_a:.4}% vs {dose_b:.4}%"
+        );
+    }
+
+    /// The peak comparison must respect calibration too, not just the LAeq
+    /// dose -- same bug, same fix, same requirement to prove it.
+    #[test]
+    fn the_peak_comparison_also_respects_calibration() {
+        let limit = NoiseLimit {
+            id: "test".into(),
+            name: "Test".into(),
+            source: "test".into(),
+            as_of: "2026-01-01".into(),
+            laeq_limit_db: 85.0,
+            reference_hours: 8.0,
+            lcpeak_limit_db: Some(135.0),
+        };
+        // Default calibration (-40 dB sensitivity, 94 dB reference) has a
+        // +134 dB dBFS->SPL offset.
+        let spl = SplCalculator::default();
+
+        let below_ceiling = dose(&metrics_with_lcpeak(-5.0), &limit, &spl); // -5 + 134 = 129 dB SPL
+        assert!(
+            !below_ceiling.peak_exceeded,
+            "129 dB SPL should not exceed a 135 dB ceiling"
+        );
+
+        let above_ceiling = dose(&metrics_with_lcpeak(2.0), &limit, &spl); // 2 + 134 = 136 dB SPL
+        assert!(
+            above_ceiling.peak_exceeded,
+            "136 dB SPL should exceed a 135 dB ceiling"
+        );
+    }
+}
