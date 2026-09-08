@@ -44,6 +44,9 @@ env_logger = "0.11"
 # CLI argument parsing
 clap = { version = "4", features = ["derive"] }
 
+# Licence activation. Blocking and tiny: this runs once per launch.
+ureq = { version = "2", features = ["json"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26"
 objc = "0.2"

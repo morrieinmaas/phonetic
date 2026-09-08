@@ -2,6 +2,7 @@ pub mod audio;
 pub mod cli;
 mod commands;
 pub mod dsp;
+pub mod licensing;
 
 use tauri::Manager;
 
@@ -80,6 +81,9 @@ pub fn run() {
             commands::measure_wav_file,
             // Virtual EQ commands
             commands::predict_eq,
+            // Licensing
+            commands::get_license_state,
+            commands::activate_license,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
