@@ -61,6 +61,9 @@ export const SessionControls = () => {
 		}
 	};
 
+	const storedTraceCount = useTraceStore((state) => state.traces.length);
+	const nothingToClear = storedTraceCount === 0;
+
 	return (
 		<div className="flex items-center gap-2">
 			<div className="flex items-center gap-1">
@@ -86,10 +89,15 @@ export const SessionControls = () => {
 					type="button"
 					data-testid="session-new"
 					onClick={handleNew}
-					title="Start a new session, clearing all stored traces"
-					className="px-2 py-1 text-xs rounded border border-border hover:bg-muted transition-colors"
+					disabled={nothingToClear}
+					title={
+						nothingToClear
+							? "Nothing to clear — capture a trace first"
+							: `Discard ${storedTraceCount} stored trace${storedTraceCount === 1 ? "" : "s"} and reset the running average`
+					}
+					className="px-2 py-1 text-xs rounded border border-border hover:bg-muted transition-colors disabled:cursor-not-allowed disabled:opacity-40"
 				>
-					New
+					{nothingToClear ? "New" : `New (${storedTraceCount})`}
 				</button>
 			</div>
 			{error && (

@@ -804,27 +804,31 @@ fn run_cpal_streams(
             channel_buffers.fill(data);
             let frame_len = channel_buffers.channel(0).len();
 
-            // Process transfer function if we have reference data
-            let ref_data: Vec<f32>;
-            {
-                let mut ref_buf = ref_buffer_for_input.lock();
-                if ref_buf.len() >= frame_len {
-                    // Take the oldest reference samples matching input length
-                    ref_data = ref_buf.drain(..frame_len).collect();
-                } else {
-                    return; // Not enough reference data yet
-                }
-            }
-
             let meas_index = meas_channel
                 .load(Ordering::Relaxed)
                 .min(channel_buffers.channel_count().saturating_sub(1));
             let measurement_data = channel_buffers.channel(meas_index);
 
-            // Process FFT for spectrum analyzer, using whichever channel is
-            // selected for metering.
-            let mut fft_proc = fft_processor.lock();
-            fft_proc.process(measurement_data);
+            // Spectrum analysis and input levels are input-only: they must run
+            // whether or not the generator is producing a reference, or the
+            // analyser goes blank on a live source and clipping goes undetected.
+            fft_processor.lock().process(measurement_data);
+
+            // The transfer function needs a reference. Take it without holding
+            // any other lock.
+            let reference: Option<Vec<f32>> = {
+                let mut ref_buf = ref_buffer_for_input.lock();
+                if ref_buf.len() >= frame_len {
+                    Some(ref_buf.drain(..frame_len).collect())
+                } else {
+                    None
+                }
+            };
+
+            let Some(ref_data) = reference else {
+                stats.lock().update(measurement_data, &[]);
+                return;
+            };
 
             stats.lock().update(measurement_data, &ref_data);
 
@@ -985,26 +989,31 @@ fn run_coreaudio_streams(
             channel_buffers.fill(data);
             let frame_len = channel_buffers.channel(0).len();
 
-            // Process transfer function if we have reference data
-            let ref_data: Vec<f32>;
-            {
-                let mut ref_buf = ref_buffer_for_input.lock();
-                if ref_buf.len() >= frame_len {
-                    ref_data = ref_buf.drain(..frame_len).collect();
-                } else {
-                    return;
-                }
-            }
-
             let meas_index = meas_channel
                 .load(Ordering::Relaxed)
                 .min(channel_buffers.channel_count().saturating_sub(1));
             let measurement_data = channel_buffers.channel(meas_index);
 
-            // Process FFT for spectrum analyzer, using whichever channel is
-            // selected for metering.
-            let mut fft_proc = fft_proc_clone.lock();
-            fft_proc.process(measurement_data);
+            // Spectrum analysis and input levels are input-only: they must run
+            // whether or not the generator is producing a reference, or the
+            // analyser goes blank on a live source and clipping goes undetected.
+            fft_proc_clone.lock().process(measurement_data);
+
+            // The transfer function needs a reference. Take it without holding
+            // any other lock.
+            let reference: Option<Vec<f32>> = {
+                let mut ref_buf = ref_buffer_for_input.lock();
+                if ref_buf.len() >= frame_len {
+                    Some(ref_buf.drain(..frame_len).collect())
+                } else {
+                    None
+                }
+            };
+
+            let Some(ref_data) = reference else {
+                stats.lock().update(measurement_data, &[]);
+                return;
+            };
 
             stats.lock().update(measurement_data, &ref_data);
 
