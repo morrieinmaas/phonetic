@@ -14,6 +14,14 @@ pub enum ReferenceSource {
     Input { channel: usize },
 }
 
+/// Ceiling on the number of measurement pairs a routing may hold. A pair's
+/// slot in the audio engine's per-pair transfer-function-processor array is
+/// its index into `Routing::pairs`, and that array is pre-allocated at this
+/// length — so this is also the hard limit on how many pairs can ever be
+/// processed. Matches `MAX_INPUT_CHANNELS`, which is already the practical
+/// ceiling for live sound measurement rigs.
+pub const MAX_MEASUREMENT_PAIRS: usize = 32;
+
 /// One measurement channel paired with a reference source.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MeasurementPair {
@@ -38,6 +46,13 @@ impl Routing {
     /// to its own measurement channel (the transfer function of a wire),
     /// and duplicate pair ids.
     pub fn validate(&self, channel_count: usize) -> Result<(), String> {
+        if self.pairs.len() > MAX_MEASUREMENT_PAIRS {
+            return Err(format!(
+                "too many measurement pairs: {} exceeds the limit of {MAX_MEASUREMENT_PAIRS}",
+                self.pairs.len()
+            ));
+        }
+
         let mut seen_ids = HashSet::with_capacity(self.pairs.len());
 
         for pair in &self.pairs {
@@ -169,5 +184,24 @@ mod tests {
         let routing = Routing { pairs: vec![] };
         assert!(routing.validate(8).is_ok());
         assert_eq!(routing.active_pairs().count(), 0);
+    }
+
+    /// The engine pre-allocates exactly `MAX_MEASUREMENT_PAIRS` processor
+    /// slots, one per pair index — more pairs than that would have nowhere
+    /// to go, so validation must refuse them rather than let a slot lookup
+    /// silently fall out of range.
+    #[test]
+    fn more_than_the_pair_limit_is_rejected() {
+        let too_many = MAX_MEASUREMENT_PAIRS + 1;
+        let routing = Routing {
+            pairs: (0..too_many)
+                .map(|i| pair(&i.to_string(), 0, ReferenceSource::Generator))
+                .collect(),
+        };
+        let error = routing.validate(8).unwrap_err();
+        assert!(
+            error.contains(&MAX_MEASUREMENT_PAIRS.to_string()),
+            "the error should name the limit: {error}"
+        );
     }
 }

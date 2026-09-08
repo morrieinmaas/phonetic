@@ -11,7 +11,7 @@ use super::generator::{Generator, SignalType};
 use super::realtime::configure_audio_thread;
 #[cfg(test)]
 use super::routing::MeasurementPair;
-use super::routing::{ReferenceSource, Routing};
+use super::routing::{ReferenceSource, Routing, MAX_MEASUREMENT_PAIRS};
 use crate::dsp::{
     FftProcessor, MultiWindowProcessor, RigSnapshot, SmoothingFraction, TransferFunctionData,
     TransferFunctionProcessor,
@@ -121,6 +121,15 @@ pub struct AudioEngine {
     // Always MAX_INPUT_CHANNELS long; only the first `input_channel_count`
     // are fed by the audio callback.
     transfer_function_processors: Vec<Arc<Mutex<TransferFunctionProcessor>>>,
+    // One transfer function processor per measurement-pair *slot*. A pair's
+    // slot is its index into `Routing::pairs` — not its position among only
+    // the enabled pairs — so disabling an earlier pair never reassigns a
+    // later pair's averaging state to it. Always MAX_MEASUREMENT_PAIRS long.
+    // Deliberately separate from `transfer_function_processors` above: two
+    // pairs are allowed to share a measurement channel (see
+    // `routing::tests::two_pairs_may_share_a_channel`), so indexing by
+    // channel would let one pair's averaging state bleed into another's.
+    pair_processors: Vec<Arc<Mutex<TransferFunctionProcessor>>>,
     multi_window_processor: Arc<Mutex<MultiWindowProcessor>>,
     // Whether the multi-time-window processor (vs. the single-FFT processor) is active
     multi_window_enabled: Arc<AtomicBool>,
@@ -152,8 +161,8 @@ pub struct AudioEngine {
 // - All atomic fields (is_running, sample_rate, buffer_size, generator_active, stop_signal)
 //   are inherently thread-safe via std::sync::atomic
 // - All Mutex-wrapped fields (input_device_name, output_device_name, fft_processor,
-//   transfer_function_processors, multi_window_processor, generator, thread_handle,
-//   reference_buffer, routing) use parking_lot::Mutex which is Send + Sync
+//   transfer_function_processors, pair_processors, multi_window_processor, generator,
+//   thread_handle, reference_buffer, routing) use parking_lot::Mutex which is Send + Sync
 // - Arc provides thread-safe reference counting
 // The thread_handle stores a JoinHandle which is Send, and we only mutate it under a Mutex lock.
 // cpal::Stream is not Send+Sync, but we don't store streams - they live in the audio thread only.
@@ -164,6 +173,14 @@ impl AudioEngine {
     pub fn new() -> Self {
         let fft_processor = Arc::new(Mutex::new(FftProcessor::new(FFT_SIZE)));
         let transfer_function_processors = (0..MAX_INPUT_CHANNELS)
+            .map(|_| {
+                Arc::new(Mutex::new(TransferFunctionProcessor::new(
+                    FFT_SIZE,
+                    DEFAULT_SAMPLE_RATE,
+                )))
+            })
+            .collect();
+        let pair_processors = (0..MAX_MEASUREMENT_PAIRS)
             .map(|_| {
                 Arc::new(Mutex::new(TransferFunctionProcessor::new(
                     FFT_SIZE,
@@ -183,6 +200,7 @@ impl AudioEngine {
             output_device_name: Arc::new(Mutex::new(None)),
             fft_processor,
             transfer_function_processors,
+            pair_processors,
             multi_window_processor,
             multi_window_enabled: Arc::new(AtomicBool::new(false)),
             input_channel_count: Arc::new(AtomicUsize::new(1)),
@@ -334,6 +352,9 @@ impl AudioEngine {
         for processor in &self.transfer_function_processors {
             processor.lock().set_sample_rate(sample_rate as f32);
         }
+        for processor in &self.pair_processors {
+            processor.lock().set_sample_rate(sample_rate as f32);
+        }
         self.multi_window_processor
             .lock()
             .set_sample_rate(sample_rate as f32);
@@ -344,7 +365,7 @@ impl AudioEngine {
 
         // Clone Arcs for the audio thread
         let fft_processor = Arc::clone(&self.fft_processor);
-        let transfer_function_processors = self.transfer_function_processors.clone();
+        let pair_processors = self.pair_processors.clone();
         let multi_window_processor = Arc::clone(&self.multi_window_processor);
         let multi_window_enabled = Arc::clone(&self.multi_window_enabled);
         let channel_count = self
@@ -372,7 +393,7 @@ impl AudioEngine {
                 channel_count,
                 output_channels,
                 fft_processor,
-                transfer_function_processors,
+                pair_processors,
                 multi_window_processor,
                 multi_window_enabled,
                 measurement_channel,
@@ -472,6 +493,9 @@ impl AudioEngine {
         for processor in &self.transfer_function_processors {
             processor.lock().set_sample_rate(sample_rate as f32);
         }
+        for processor in &self.pair_processors {
+            processor.lock().set_sample_rate(sample_rate as f32);
+        }
         self.multi_window_processor
             .lock()
             .set_sample_rate(sample_rate as f32);
@@ -482,7 +506,7 @@ impl AudioEngine {
 
         // Clone Arcs for the audio thread
         let fft_processor = Arc::clone(&self.fft_processor);
-        let transfer_function_processors = self.transfer_function_processors.clone();
+        let pair_processors = self.pair_processors.clone();
         let multi_window_processor = Arc::clone(&self.multi_window_processor);
         let multi_window_enabled = Arc::clone(&self.multi_window_enabled);
         let channel_count = self
@@ -509,7 +533,7 @@ impl AudioEngine {
                 channel_count,
                 exclusive_mode,
                 fft_processor,
-                transfer_function_processors,
+                pair_processors,
                 multi_window_processor,
                 multi_window_enabled,
                 measurement_channel,
@@ -597,6 +621,19 @@ impl AudioEngine {
         self.transfer_function_processors[clamped].lock().get_data()
     }
 
+    /// Transfer function data for one measurement-pair slot (a pair's index
+    /// into `Routing::pairs`). Mapping a pair's id to its slot is a later
+    /// task's job; this is the slot-indexed primitive it will build on. In
+    /// multi-window mode there is a single shared processor, so every slot
+    /// returns the same data there — matching `transfer_function_data_for_channel`.
+    pub fn get_pair_transfer_function_by_slot(&self, slot: usize) -> TransferFunctionData {
+        if self.multi_window_enabled.load(Ordering::Relaxed) {
+            return self.multi_window_processor.lock().get_data();
+        }
+        let clamped = slot.min(self.pair_processors.len() - 1);
+        self.pair_processors[clamped].lock().get_data()
+    }
+
     /// Configure how many input channels the next stream should open.
     /// Clamped to 1..=MAX_INPUT_CHANNELS; takes effect on the next
     /// `start_stream`.
@@ -629,6 +666,9 @@ impl AudioEngine {
         for processor in &self.transfer_function_processors {
             processor.lock().reset_averaging();
         }
+        for processor in &self.pair_processors {
+            processor.lock().reset_averaging();
+        }
         self.multi_window_processor.lock().reset_averaging();
         log::info!("Transfer function averaging reset");
     }
@@ -649,6 +689,11 @@ impl AudioEngine {
             // Update sample rate in case it changed
             processor.set_sample_rate(sample_rate);
         }
+        for processor in &self.pair_processors {
+            let mut processor = processor.lock();
+            processor.set_fft_size(size);
+            processor.set_sample_rate(sample_rate);
+        }
 
         log::info!("FFT size set to {}", size);
         Ok(())
@@ -657,6 +702,9 @@ impl AudioEngine {
     /// Delay the transfer function reference to compensate for propagation time.
     pub fn set_transfer_function_delay(&self, delay_samples: usize) {
         for processor in &self.transfer_function_processors {
+            processor.lock().set_delay_samples(delay_samples);
+        }
+        for processor in &self.pair_processors {
             processor.lock().set_delay_samples(delay_samples);
         }
         self.multi_window_processor
@@ -672,6 +720,9 @@ impl AudioEngine {
     /// Frames retained by the transfer function running average.
     pub fn set_max_averages(&self, n: usize) {
         for processor in &self.transfer_function_processors {
+            processor.lock().set_max_averages(n);
+        }
+        for processor in &self.pair_processors {
             processor.lock().set_max_averages(n);
         }
         self.multi_window_processor.lock().set_max_averages(n);
@@ -797,7 +848,7 @@ fn run_cpal_streams(
     channel_count: usize,
     output_channels: u16,
     fft_processor: Arc<Mutex<FftProcessor>>,
-    transfer_function_processors: Vec<Arc<Mutex<TransferFunctionProcessor>>>,
+    pair_processors: Vec<Arc<Mutex<TransferFunctionProcessor>>>,
     multi_window_processor: Arc<Mutex<MultiWindowProcessor>>,
     multi_window_enabled: Arc<AtomicBool>,
     measurement_channel: Arc<AtomicUsize>,
@@ -825,7 +876,7 @@ fn run_cpal_streams(
     };
 
     // Clone references for input callback
-    let tf_processors = transfer_function_processors.clone();
+    let pair_processors_for_input = pair_processors.clone();
     let mw_processor = Arc::clone(&multi_window_processor);
     let mw_enabled = Arc::clone(&multi_window_enabled);
     let meas_channel = Arc::clone(&measurement_channel);
@@ -888,7 +939,7 @@ fn run_cpal_streams(
                 process_active_pairs(
                     &routing,
                     &channel_buffers,
-                    &tf_processors,
+                    &pair_processors_for_input,
                     generator_reference.as_deref(),
                 );
             }
@@ -983,7 +1034,7 @@ fn run_coreaudio_streams(
     channel_count: usize,
     exclusive_mode: bool,
     fft_processor: Arc<Mutex<FftProcessor>>,
-    transfer_function_processors: Vec<Arc<Mutex<TransferFunctionProcessor>>>,
+    pair_processors: Vec<Arc<Mutex<TransferFunctionProcessor>>>,
     multi_window_processor: Arc<Mutex<MultiWindowProcessor>>,
     multi_window_enabled: Arc<AtomicBool>,
     measurement_channel: Arc<AtomicUsize>,
@@ -1012,7 +1063,7 @@ fn run_coreaudio_streams(
     };
 
     // Clone references for input callback
-    let tf_processors = transfer_function_processors.clone();
+    let pair_processors_for_input = pair_processors.clone();
     let mw_processor = Arc::clone(&multi_window_processor);
     let mw_enabled = Arc::clone(&multi_window_enabled);
     let meas_channel = Arc::clone(&measurement_channel);
@@ -1077,7 +1128,7 @@ fn run_coreaudio_streams(
                 process_active_pairs(
                     &routing,
                     &channel_buffers,
-                    &tf_processors,
+                    &pair_processors_for_input,
                     generator_reference.as_deref(),
                 );
             }
@@ -1182,6 +1233,18 @@ fn process_pair(
 /// never diverge between backends — that exact divergence has shipped as a
 /// bug in this project before.
 ///
+/// `pair_processors` is indexed by *slot*, and a pair's slot is its index
+/// into `routing.pairs` — not its position among only the enabled pairs.
+/// That distinction matters twice over: `routing.rs` explicitly permits two
+/// pairs to share a `measurement_channel` (see
+/// `routing::tests::two_pairs_may_share_a_channel`), so indexing by channel
+/// would silently blend two pairs' averaging state into one meaningless
+/// trace; and indexing by position among only the *enabled* pairs would mean
+/// disabling an earlier pair reassigns every later pair's slot — and with it,
+/// its accumulated averaging state — to the wrong id. Iterating
+/// `routing.pairs` directly (rather than `routing.active_pairs()`) keeps each
+/// pair's slot fixed regardless of what else is enabled.
+///
 /// `generator_reference` is the block already drained from `reference_buffer`
 /// for this callback (or `None` if the generator hasn't produced enough
 /// samples yet); it is shared by every `Generator`-referenced pair rather
@@ -1190,12 +1253,15 @@ fn process_pair(
 fn process_active_pairs(
     routing: &Routing,
     channel_buffers: &ChannelBuffers,
-    transfer_function_processors: &[Arc<Mutex<TransferFunctionProcessor>>],
+    pair_processors: &[Arc<Mutex<TransferFunctionProcessor>>],
     generator_reference: Option<&[f32]>,
 ) {
     let channel_count = channel_buffers.channel_count();
 
-    for pair in routing.active_pairs() {
+    for (slot, pair) in routing.pairs.iter().enumerate().filter(|(_, p)| p.enabled) {
+        if slot >= pair_processors.len() {
+            continue;
+        }
         if pair.measurement_channel >= channel_count {
             continue;
         }
@@ -1217,7 +1283,7 @@ fn process_active_pairs(
         };
 
         let measurement = channel_buffers.channel(pair.measurement_channel);
-        let mut processor = transfer_function_processors[pair.measurement_channel].lock();
+        let mut processor = pair_processors[slot].lock();
         process_pair(&mut processor, measurement, reference, pair.delay_samples);
     }
 }
@@ -1500,5 +1566,130 @@ mod tests {
             }],
         };
         assert_eq!(routing.active_pairs().count(), 0);
+    }
+
+    fn pair_processors_for_test(count: usize) -> Vec<Arc<Mutex<TransferFunctionProcessor>>> {
+        (0..count)
+            .map(|_| {
+                Arc::new(Mutex::new(TransferFunctionProcessor::new(
+                    FFT_SIZE,
+                    DEFAULT_SAMPLE_RATE,
+                )))
+            })
+            .collect()
+    }
+
+    fn pair(id: &str, measurement_channel: usize, reference: ReferenceSource) -> MeasurementPair {
+        MeasurementPair {
+            id: id.into(),
+            name: id.into(),
+            measurement_channel,
+            reference,
+            delay_samples: 0,
+            calibration_offset_db: 0.0,
+            enabled: true,
+        }
+    }
+
+    /// This is the regression test for the actual bug: two active pairs that
+    /// share a measurement channel but have different references must land
+    /// in different processors and produce different transfer function data.
+    /// Before the fix, both pairs were looked up as
+    /// `transfer_function_processors[pair.measurement_channel]` — the same
+    /// index for both, since they share a measurement channel — so the
+    /// second pair processed each block silently overwrote the first pair's
+    /// averaging state with its own, and both pairs read back the same
+    /// (meaningless) blended data.
+    #[test]
+    fn pairs_sharing_a_measurement_channel_with_different_references_stay_independent() {
+        let fs = DEFAULT_SAMPLE_RATE;
+        let frames = FFT_SIZE * 4;
+
+        let tone: Vec<f32> = (0..frames)
+            .map(|i| (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / fs).sin() * 0.5)
+            .collect();
+
+        // Channel 0: the shared measurement signal.
+        // Channel 1: identical to the measurement — pair "a"'s reference.
+        // Channel 2: half the measurement — pair "b"'s reference, which
+        // should read back roughly +6 dB where "a" reads roughly 0 dB.
+        let mut interleaved = Vec::with_capacity(frames * 3);
+        for &sample in &tone {
+            interleaved.push(sample);
+            interleaved.push(sample);
+            interleaved.push(sample * 0.5);
+        }
+        let mut buffers = ChannelBuffers::new(3, frames);
+        buffers.fill(&interleaved);
+
+        let routing = Routing {
+            pairs: vec![
+                pair("a", 0, ReferenceSource::Input { channel: 1 }),
+                pair("b", 0, ReferenceSource::Input { channel: 2 }),
+            ],
+        };
+
+        let pair_processors = pair_processors_for_test(2);
+        process_active_pairs(&routing, &buffers, &pair_processors, None);
+
+        let bin_1k = (1000.0 / fs * FFT_SIZE as f32).round() as usize;
+        let a = pair_processors[0].lock().get_data();
+        let b = pair_processors[1].lock().get_data();
+
+        assert!(
+            a.magnitude_db[bin_1k].abs() < 3.0,
+            "pair a (unity-gain reference) should read ~0 dB, got {}",
+            a.magnitude_db[bin_1k]
+        );
+        assert!(
+            (b.magnitude_db[bin_1k] - 6.02).abs() < 2.0,
+            "pair b (half-gain reference) should read ~+6 dB, got {}",
+            b.magnitude_db[bin_1k]
+        );
+        assert_ne!(
+            a.magnitude_db, b.magnitude_db,
+            "pairs sharing a measurement channel must not share a processor"
+        );
+    }
+
+    /// A pair's slot is its index into `routing.pairs`, not its position
+    /// among only the enabled pairs. Disabling an earlier pair must not
+    /// shift a later pair into a different slot — doing so would hand it
+    /// another pair's (or nobody's) accumulated averaging state.
+    #[test]
+    fn disabling_an_earlier_pair_does_not_shift_a_later_pairs_slot() {
+        let fs = DEFAULT_SAMPLE_RATE;
+        let frames = FFT_SIZE * 2;
+        let tone: Vec<f32> = (0..frames)
+            .map(|i| (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / fs).sin())
+            .collect();
+
+        let mut buffers = ChannelBuffers::new(1, frames);
+        buffers.fill(&tone);
+
+        let mut disabled = pair("a", 0, ReferenceSource::Generator);
+        disabled.enabled = false;
+        let routing = Routing {
+            pairs: vec![disabled, pair("b", 0, ReferenceSource::Generator)],
+        };
+
+        let pair_processors = pair_processors_for_test(2);
+        process_active_pairs(&routing, &buffers, &pair_processors, Some(&tone));
+
+        // Slot 0 belongs to the disabled pair "a" and must stay untouched —
+        // a fresh processor's magnitude starts at -120 dB in every bin.
+        let slot0 = pair_processors[0].lock().get_data();
+        assert!(
+            slot0.magnitude_db.iter().all(|&db| db == -120.0),
+            "the disabled pair's slot should be untouched, not repurposed for pair b"
+        );
+
+        // Slot 1 belongs to pair "b", which measured a tone against itself —
+        // it must actually have been processed.
+        let slot1 = pair_processors[1].lock().get_data();
+        assert!(
+            slot1.magnitude_db.iter().any(|&db| db != -120.0),
+            "pair b's own slot should have been processed"
+        );
     }
 }
