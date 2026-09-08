@@ -48,9 +48,17 @@ export const SessionControls = () => {
 		}
 	};
 
-	const handleNew = () => {
+	// Clearing traces alone is invisible when none are captured, which read as a
+	// dead button. A new session also discards the accumulated average, which is
+	// the part an operator can actually see change on the trace.
+	const handleNew = async () => {
 		setError(null);
 		useTraceStore.getState().clearAllTraces();
+		try {
+			await audioApi.resetAveraging();
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+		}
 	};
 
 	return (
