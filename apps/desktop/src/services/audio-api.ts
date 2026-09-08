@@ -3,6 +3,7 @@ import type {
 	AudioBackend,
 	AudioDeviceList,
 	AudioState,
+	Diagnosis,
 	ReferenceCurve,
 	ReferenceCurveInfo,
 	ReferenceCurveType,
@@ -211,6 +212,11 @@ export const audioApi = {
 		frequencies: number[],
 	): Promise<ReferenceCurve> =>
 		invoke<ReferenceCurve>("get_reference_curve_at_frequencies", { curveType, frequencies }),
+
+	/**
+	 * Get the rig's current diagnoses, most severe first.
+	 */
+	getDiagnostics: (): Promise<Diagnosis[]> => invoke<Diagnosis[]>("get_diagnostics"),
 };
 
 /**

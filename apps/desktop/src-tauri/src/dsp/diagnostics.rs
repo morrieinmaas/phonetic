@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub enum Severity {
     Info,
     Warning,
@@ -15,7 +15,7 @@ pub enum Severity {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct Diagnosis {
     /// Stable identifier, safe to match on in the UI and in tests.
     pub code: String,
@@ -24,11 +24,15 @@ pub struct Diagnosis {
     pub message: String,
     /// Identifier of a one-click fix the UI can offer, if there is one.
     pub action: Option<String>,
+    /// Measured delay in samples, populated by rules that diagnose an
+    /// unapplied delay so the UI can offer a one-click fix without a
+    /// second round trip.
+    pub delay_samples: Option<i32>,
 }
 
 /// Everything the rules need, sampled once per second by the audio engine.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct RigSnapshot {
     /// Linear peak over the last window, 0.0 to 1.0.
     pub reference_peak: f32,
@@ -112,6 +116,7 @@ fn clipping(s: &RigSnapshot) -> Option<Diagnosis> {
         severity: Severity::Error,
         message: format!("Input clipping on {channel}. Reduce preamp gain — the measurement is invalid until you do."),
         action: None,
+        delay_samples: None,
     })
 }
 
@@ -125,6 +130,7 @@ fn no_measurement_signal(s: &RigSnapshot) -> Option<Diagnosis> {
         severity: Severity::Error,
         message: "No signal on the measurement channel. Check phantom power, the cable, and that the right input is selected.".into(),
         action: None,
+        delay_samples: None,
     })
 }
 
@@ -139,6 +145,7 @@ fn measurement_too_quiet(s: &RigSnapshot) -> Option<Diagnosis> {
         severity: Severity::Warning,
         message: format!("Measurement level is {dbfs:.0} dBFS — too low for a reliable result. Raise preamp gain."),
         action: None,
+        delay_samples: None,
     })
 }
 
@@ -152,6 +159,7 @@ fn channels_swapped(s: &RigSnapshot) -> Option<Diagnosis> {
         severity: Severity::Warning,
         message: "The measurement channel is far hotter than the reference across the whole band. Reference and measurement are probably swapped.".into(),
         action: Some("swap_channels".into()),
+        delay_samples: None,
     })
 }
 
@@ -174,6 +182,7 @@ fn delay_not_applied(s: &RigSnapshot) -> Option<Diagnosis> {
         severity: Severity::Warning,
         message: format!("Coherence is low above {:.0} kHz — the measurement is delayed {ms:.1} ms and nothing is compensating for it.", HF_SPLIT_HZ / 1000.0),
         action: Some("apply_delay".into()),
+        delay_samples: Some(s.measured_delay_samples),
     })
 }
 
@@ -196,6 +205,7 @@ fn sample_rate_drift(s: &RigSnapshot) -> Option<Diagnosis> {
         severity: Severity::Warning,
         message: format!("Measured delay has drifted {total} samples in one direction. Two clocks are running at different rates — check your aggregate device or clock source."),
         action: None,
+        delay_samples: None,
     })
 }
 
@@ -213,5 +223,6 @@ fn low_coherence(s: &RigSnapshot) -> Option<Diagnosis> {
         severity: Severity::Warning,
         message: "Coherence is low across the band. Raise the signal above the ambient noise, or average for longer.".into(),
         action: None,
+        delay_samples: None,
     })
 }

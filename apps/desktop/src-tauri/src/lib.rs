@@ -50,6 +50,7 @@ pub fn run() {
             commands::set_resolution_mode,
             commands::is_multi_window,
             commands::set_smoothing,
+            commands::get_diagnostics,
             // Delay finder commands
             commands::find_delay,
             commands::set_delay_finder_max_delay,

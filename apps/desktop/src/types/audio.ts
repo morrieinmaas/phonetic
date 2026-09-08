@@ -100,3 +100,19 @@ export type SmoothingFraction =
 	| "octave12"
 	| "octave24"
 	| "octave48";
+
+/** How urgently a rig diagnosis needs the operator's attention. */
+export type Severity = "info" | "warning" | "error";
+
+/** A named cause for a bad measurement, produced by the rig diagnostics rules. */
+export interface Diagnosis {
+	/** Stable identifier, safe to match on in the UI and in tests. */
+	code: string;
+	severity: Severity;
+	/** Written for a system tech standing at front of house, not for a developer. */
+	message: string;
+	/** Identifier of a one-click fix the UI can offer, if there is one. */
+	action: string | null;
+	/** Measured delay in samples, present when the diagnosis is about an unapplied delay. */
+	delay_samples: number | null;
+}

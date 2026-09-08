@@ -91,6 +91,7 @@ fn an_unapplied_delay_is_detected_with_a_one_click_fix() {
         .find(|d| d.code == "delay_not_applied")
         .expect("should flag delay");
     assert_eq!(d.action.as_deref(), Some("apply_delay"));
+    assert_eq!(d.delay_samples, Some(470));
     assert!(
         d.message.contains("9.8"),
         "should quote the delay in ms, got: {}",

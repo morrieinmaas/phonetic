@@ -9,7 +9,7 @@ use std::thread;
 use super::generator::{Generator, SignalType};
 use super::realtime::configure_audio_thread;
 use crate::dsp::{
-    FftProcessor, MultiWindowProcessor, SmoothingFraction, TransferFunctionData,
+    FftProcessor, MultiWindowProcessor, RigSnapshot, SmoothingFraction, TransferFunctionData,
     TransferFunctionProcessor,
 };
 
@@ -58,6 +58,47 @@ pub struct AudioState {
     pub exclusive_mode: bool,
 }
 
+/// Peak and RMS over the most recent callback, plus a short delay history for
+/// drift detection.
+#[derive(Default)]
+pub struct LevelStats {
+    pub reference_peak: f32,
+    pub measurement_peak: f32,
+    pub reference_rms: f32,
+    pub measurement_rms: f32,
+    pub delay_history: Vec<i32>,
+}
+
+impl LevelStats {
+    /// Retain at most this many delay samples; enough to see a trend, short
+    /// enough to react when the operator fixes the clock.
+    const DELAY_HISTORY: usize = 16;
+
+    pub fn push_delay(&mut self, delay: i32) {
+        self.delay_history.push(delay);
+        if self.delay_history.len() > Self::DELAY_HISTORY {
+            self.delay_history.remove(0);
+        }
+    }
+
+    /// Compute peak and RMS in place over the given slices. Called from the
+    /// audio callback, so this must not allocate.
+    pub fn update(&mut self, measurement: &[f32], reference: &[f32]) {
+        let peak = |v: &[f32]| v.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        let rms = |v: &[f32]| {
+            if v.is_empty() {
+                0.0
+            } else {
+                (v.iter().map(|s| s * s).sum::<f32>() / v.len() as f32).sqrt()
+            }
+        };
+        self.measurement_peak = peak(measurement);
+        self.reference_peak = peak(reference);
+        self.measurement_rms = rms(measurement);
+        self.reference_rms = rms(reference);
+    }
+}
+
 /// Thread-safe audio engine that can be used with Tauri state.
 /// Audio streams run in a dedicated thread since cpal::Stream is not Send+Sync.
 pub struct AudioEngine {
@@ -81,6 +122,8 @@ pub struct AudioEngine {
     backend: Arc<AtomicU8>,
     // Exclusive mode flag (macOS CoreAudio only)
     exclusive_mode: Arc<AtomicBool>,
+    /// Rolling level and delay statistics, updated from the input callback.
+    level_stats: Arc<Mutex<LevelStats>>,
 }
 
 // SAFETY: AudioEngine is Send + Sync because:
@@ -123,6 +166,7 @@ impl AudioEngine {
             reference_buffer: Arc::new(Mutex::new(Vec::with_capacity(FFT_SIZE * 2))),
             backend: Arc::new(AtomicU8::new(AudioBackend::default() as u8)),
             exclusive_mode: Arc::new(AtomicBool::new(false)),
+            level_stats: Arc::new(Mutex::new(LevelStats::default())),
         }
     }
 
@@ -273,6 +317,7 @@ impl AudioEngine {
         let is_running = Arc::clone(&self.is_running);
         let stop_signal = Arc::clone(&self.stop_signal);
         let reference_buffer = Arc::clone(&self.reference_buffer);
+        let level_stats = Arc::clone(&self.level_stats);
 
         let output_channels = output_config.channels();
 
@@ -293,6 +338,7 @@ impl AudioEngine {
                 is_running,
                 stop_signal,
                 reference_buffer,
+                level_stats,
             );
         });
 
@@ -394,6 +440,7 @@ impl AudioEngine {
         let is_running = Arc::clone(&self.is_running);
         let stop_signal = Arc::clone(&self.stop_signal);
         let reference_buffer = Arc::clone(&self.reference_buffer);
+        let level_stats = Arc::clone(&self.level_stats);
         let exclusive_mode = self.exclusive_mode.load(Ordering::Relaxed);
 
         // Spawn audio thread
@@ -413,6 +460,7 @@ impl AudioEngine {
                 is_running,
                 stop_signal,
                 reference_buffer,
+                level_stats,
             );
         });
 
@@ -546,6 +594,41 @@ impl AudioEngine {
     pub fn smoothing(&self) -> SmoothingFraction {
         self.multi_window_processor.lock().smoothing()
     }
+
+    /// Current sample rate in Hz.
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate.load(Ordering::Relaxed)
+    }
+
+    /// Current FFT size in samples.
+    pub fn fft_size(&self) -> usize {
+        self.transfer_function_processor.lock().fft_size()
+    }
+
+    /// Record a delay measurement so drift detection has history.
+    pub fn push_measured_delay(&self, delay_samples: i32) {
+        self.level_stats.lock().push_delay(delay_samples);
+    }
+
+    /// Sample everything the diagnostics rules need.
+    pub fn rig_snapshot(&self) -> RigSnapshot {
+        let stats = self.level_stats.lock();
+        let data = self.get_transfer_function_data();
+        RigSnapshot {
+            reference_peak: stats.reference_peak,
+            measurement_peak: stats.measurement_peak,
+            reference_rms: stats.reference_rms,
+            measurement_rms: stats.measurement_rms,
+            coherence: data.coherence,
+            magnitude_db: data.magnitude_db,
+            frequencies: data.frequencies,
+            measured_delay_samples: stats.delay_history.last().copied().unwrap_or(0),
+            applied_delay_samples: self.transfer_function_delay(),
+            delay_history: stats.delay_history.clone(),
+            sample_rate: self.sample_rate() as f32,
+            fft_size: self.fft_size(),
+        }
+    }
 }
 
 impl Default for AudioEngine {
@@ -592,6 +675,7 @@ fn run_cpal_streams(
     is_running: Arc<AtomicBool>,
     stop_signal: Arc<AtomicBool>,
     reference_buffer: Arc<Mutex<Vec<f32>>>,
+    level_stats: Arc<Mutex<LevelStats>>,
 ) {
     // Set real-time priority for this audio thread
     configure_audio_thread();
@@ -613,6 +697,7 @@ fn run_cpal_streams(
     let mw_processor = Arc::clone(&multi_window_processor);
     let mw_enabled = Arc::clone(&multi_window_enabled);
     let ref_buffer_for_input = Arc::clone(&reference_buffer);
+    let stats = Arc::clone(&level_stats);
 
     // Build input stream
     let input_stream = match input_device.build_input_stream(
@@ -633,6 +718,8 @@ fn run_cpal_streams(
                     return; // Not enough reference data yet
                 }
             }
+
+            stats.lock().update(data, &ref_data);
 
             // Process transfer function
             // Route to whichever resolution mode is active. Both processors keep
@@ -740,6 +827,7 @@ fn run_coreaudio_streams(
     is_running: Arc<AtomicBool>,
     stop_signal: Arc<AtomicBool>,
     reference_buffer: Arc<Mutex<Vec<f32>>>,
+    level_stats: Arc<Mutex<LevelStats>>,
 ) {
     // Set real-time priority for this audio thread
     configure_audio_thread();
@@ -757,6 +845,7 @@ fn run_coreaudio_streams(
     let mw_enabled = Arc::clone(&multi_window_enabled);
     let ref_buffer_for_input = Arc::clone(&reference_buffer);
     let fft_proc_clone = Arc::clone(&fft_processor);
+    let stats = Arc::clone(&level_stats);
 
     // Create input stream
     let mut input_stream = match CoreAudioInputStream::new(
@@ -777,6 +866,8 @@ fn run_coreaudio_streams(
                     return;
                 }
             }
+
+            stats.lock().update(data, &ref_data);
 
             // Route to whichever resolution mode is active. Both processors keep
             // their own state, so switching modes never loses the other's averages.

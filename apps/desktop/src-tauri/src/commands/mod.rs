@@ -4,12 +4,12 @@ use crate::audio::{
     enumerate_devices, AudioBackend, AudioDeviceList, AudioEngine, AudioState, SignalType,
 };
 use crate::dsp::{
-    export_impulse_response_csv, export_impulse_response_json, export_impulse_response_txt,
-    export_transfer_function_csv, export_transfer_function_json, export_transfer_function_txt,
-    generate_standard_frequencies, predict_with_eq, write_to_file, BiquadFilter, DelayFinder,
-    DelayResult, ExportFormat, ImpulseResponseData, ImpulseResponseProcessor, MeasurementMetadata,
-    MicrophoneCalibration, ReferenceCurve, ReferenceCurveType, SmoothingFraction, SplCalculator,
-    TransferFunctionData,
+    diagnose, export_impulse_response_csv, export_impulse_response_json,
+    export_impulse_response_txt, export_transfer_function_csv, export_transfer_function_json,
+    export_transfer_function_txt, generate_standard_frequencies, predict_with_eq, write_to_file,
+    BiquadFilter, DelayFinder, DelayResult, Diagnosis, ExportFormat, ImpulseResponseData,
+    ImpulseResponseProcessor, MeasurementMetadata, MicrophoneCalibration, ReferenceCurve,
+    ReferenceCurveType, SmoothingFraction, SplCalculator, TransferFunctionData,
 };
 use parking_lot::Mutex;
 
@@ -200,6 +200,11 @@ pub fn set_smoothing(engine: State<'_, AudioEngine>, fraction: SmoothingFraction
     engine.set_smoothing(fraction);
 }
 
+#[tauri::command]
+pub fn get_diagnostics(engine: State<'_, AudioEngine>) -> Vec<Diagnosis> {
+    diagnose(&engine.rig_snapshot())
+}
+
 // ============================================================================
 // Delay Finder Commands
 // ============================================================================
@@ -207,10 +212,13 @@ pub fn set_smoothing(engine: State<'_, AudioEngine>, fraction: SmoothingFraction
 #[tauri::command]
 pub fn find_delay(
     dsp: State<'_, DspState>,
+    engine: State<'_, AudioEngine>,
     reference: Vec<f32>,
     measured: Vec<f32>,
 ) -> DelayResult {
-    dsp.delay_finder.lock().find_delay(&reference, &measured)
+    let result = dsp.delay_finder.lock().find_delay(&reference, &measured);
+    engine.push_measured_delay(result.delay_samples);
+    result
 }
 
 #[tauri::command]
@@ -549,5 +557,16 @@ mod tests {
         // Averaging depth is observable only via behaviour; assert the setter is
         // reachable and does not panic under the engine's lock.
         engine.set_max_averages(64);
+    }
+
+    #[test]
+    fn a_stopped_engine_reports_no_signal_rather_than_panicking() {
+        let engine = AudioEngine::new();
+        let snapshot = engine.rig_snapshot();
+        let found = crate::dsp::diagnose(&snapshot);
+        assert!(
+            found.iter().any(|d| d.code == "no_measurement_signal"),
+            "an idle engine has no measurement signal"
+        );
     }
 }
