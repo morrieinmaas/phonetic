@@ -42,6 +42,16 @@ const SECONDARY_VIEWS: readonly SecondaryView[] = [
 	"room",
 ];
 
+/** Tab labels, kept beside SECONDARY_VIEWS so a new view cannot ship unlabelled. */
+const SECONDARY_VIEW_LABELS: Record<SecondaryView, string> = {
+	transfer: "Transfer Function",
+	spectrogram: "Spectrogram",
+	matrix: "Channel Matrix",
+
+	leq: "Noise Dose",
+	room: "Room Criteria",
+};
+
 /** How often a completed LEQ interval is appended to the log, in seconds. */
 const LEQ_LOG_INTERVAL_SECONDS = 60;
 
@@ -608,64 +618,27 @@ export const App = () => {
 						{/* Secondary view - Transfer function or Spectrogram */}
 						<div className="glass flex min-h-[420px] flex-1 flex-col rounded-lg p-4">
 							{/* View toggle */}
-							<div className="flex items-center justify-end gap-2 mb-2 flex-shrink-0">
+							{/* View toggle. Wraps rather than clipping: five labelled tabs
+							    overflow a narrow window, and the old segmented control had
+							    overflow-hidden, so tabs past the edge simply vanished. */}
+							<div className="mb-2 flex flex-shrink-0 flex-wrap items-center justify-end gap-2">
 								<span className="text-xs text-muted-foreground">View:</span>
-								<div className="flex rounded-md border border-border overflow-hidden">
-									<button
-										type="button"
-										onClick={() => setSecondaryView("transfer")}
-										className={`px-2 py-1 text-xs transition-colors ${
-											secondaryView === "transfer"
-												? "bg-primary text-primary-foreground"
-												: "bg-transparent text-muted-foreground hover:bg-muted"
-										}`}
-									>
-										Transfer Function
-									</button>
-									<button
-										type="button"
-										onClick={() => setSecondaryView("spectrogram")}
-										className={`px-2 py-1 text-xs transition-colors ${
-											secondaryView === "spectrogram"
-												? "bg-primary text-primary-foreground"
-												: "bg-transparent text-muted-foreground hover:bg-muted"
-										}`}
-									>
-										Spectrogram
-									</button>
-									<button
-										type="button"
-										onClick={() => setSecondaryView("matrix")}
-										className={`px-2 py-1 text-xs transition-colors ${
-											secondaryView === "matrix"
-												? "bg-primary text-primary-foreground"
-												: "bg-transparent text-muted-foreground hover:bg-muted"
-										}`}
-									>
-										Channel Matrix
-									</button>
-									<button
-										type="button"
-										onClick={() => setSecondaryView("leq")}
-										className={`px-2 py-1 text-xs transition-colors ${
-											secondaryView === "leq"
-												? "bg-primary text-primary-foreground"
-												: "bg-transparent text-muted-foreground hover:bg-muted"
-										}`}
-									>
-										Noise Dose
-									</button>
-									<button
-										type="button"
-										onClick={() => setSecondaryView("room")}
-										className={`px-2 py-1 text-xs transition-colors ${
-											secondaryView === "room"
-												? "bg-primary text-primary-foreground"
-												: "bg-transparent text-muted-foreground hover:bg-muted"
-										}`}
-									>
-										Room Criteria
-									</button>
+								<div className="flex flex-wrap gap-0.5 rounded-md border border-border p-0.5">
+									{SECONDARY_VIEWS.map((view) => (
+										<button
+											key={view}
+											type="button"
+											onClick={() => setSecondaryView(view)}
+											aria-pressed={secondaryView === view}
+											className={`whitespace-nowrap rounded px-2 py-1 text-xs transition-colors ${
+												secondaryView === view
+													? "bg-primary text-primary-foreground"
+													: "bg-transparent text-muted-foreground hover:bg-muted"
+											}`}
+										>
+											{SECONDARY_VIEW_LABELS[view]}
+										</button>
+									))}
 								</div>
 							</div>
 							{/* View content */}
