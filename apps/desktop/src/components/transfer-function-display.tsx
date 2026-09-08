@@ -43,6 +43,12 @@ const FREQ_LIMITS: [number, number] = [20, 20000];
 const CURSOR_A_COLOR = "#f59e0b";
 const CURSOR_B_COLOR = "#d946ef";
 
+/** How often the virtual-EQ prediction may be recomputed, in milliseconds.
+    A predicted curve is a reference overlay, not the live trace; recomputing
+    it per measurement frame cost an IPC round trip of the whole transfer
+    function each time. */
+const EQ_PREDICTION_INTERVAL_MS = 250;
+
 // Map to log frequency scale for display
 const mapToLogScale = (
 	linearData: number[],
@@ -142,9 +148,16 @@ export const TransferFunctionDisplay = ({
 	);
 	const eqBypassed = useEqStore((state) => state.bypassed);
 	const [predictedData, setPredictedData] = useState<TransferFunctionData | null>(null);
+	const lastEqPredictionRef = useRef(0);
 	const eqSourceData = data ?? visibleTraces[0]?.data ?? null;
 	const eqActive = !eqBypassed && enabledEqFilters.length > 0 && eqSourceData !== null;
 
+	// The EQ prediction is an overlay on a live trace, so eqSourceData changes on
+	// every measurement poll. Running it per frame meant an IPC round trip
+	// serialising the whole transfer function both ways, sixty times a second,
+	// each one contending for the processor lock — enough to stall the app
+	// whenever a filter was enabled. An operator cannot read a predicted curve
+	// faster than a few updates a second, so it is throttled to that.
 	useEffect(() => {
 		if (!eqActive || !eqSourceData) {
 			setPredictedData(null);
@@ -160,17 +173,24 @@ export const TransferFunctionDisplay = ({
 			enabled: f.enabled,
 		}));
 
-		audioApi
-			.predictEq(eqSourceData, filterBank, sampleRate)
-			.then((result) => {
-				if (!cancelled) setPredictedData(result);
-			})
-			.catch(() => {
-				if (!cancelled) setPredictedData(null);
-			});
+		const sinceLast = Date.now() - lastEqPredictionRef.current;
+		const delay = Math.max(0, EQ_PREDICTION_INTERVAL_MS - sinceLast);
+
+		const timer = setTimeout(() => {
+			lastEqPredictionRef.current = Date.now();
+			audioApi
+				.predictEq(eqSourceData, filterBank, sampleRate)
+				.then((result) => {
+					if (!cancelled) setPredictedData(result);
+				})
+				.catch(() => {
+					if (!cancelled) setPredictedData(null);
+				});
+		}, delay);
 
 		return () => {
 			cancelled = true;
+			clearTimeout(timer);
 		};
 	}, [eqActive, eqSourceData, enabledEqFilters, sampleRate]);
 
@@ -638,6 +658,7 @@ export const TransferFunctionDisplay = ({
 			<details className="flex-shrink-0 rounded-md border border-border/60 bg-muted/20">
 				<summary className="cursor-pointer select-none px-2 py-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground marker:text-muted-foreground">
 					Virtual EQ
+					{eqActive && <span className="ml-2 normal-case text-primary">· predicting</span>}
 				</summary>
 				<div className="border-t border-border/60 p-2">
 					<EqControls />

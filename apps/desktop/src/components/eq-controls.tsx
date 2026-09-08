@@ -16,16 +16,21 @@ export const EqControls = () => {
 
 	return (
 		<div data-testid="eq-controls" className="flex flex-col gap-2 text-xs">
-			{/* Actions sit inline with the disclosure heading, not on a row of their
-			    own — a full-width strip holding two right-aligned buttons reads as
-			    a mistake. */}
-			<div className="flex items-center justify-end">
+			{/* Bank-level actions, with a count on the left so the row carries
+			    information instead of being an empty strip with two buttons on it. */}
+			<div className="flex items-center justify-between gap-3">
+				<span className="text-muted-foreground">
+					{filters.length === 0
+						? "No filters yet — add one to predict its effect."
+						: `${filters.length} filter${filters.length === 1 ? "" : "s"}`}
+				</span>
 				<div className="flex items-center gap-2">
 					<button
 						type="button"
 						data-testid="eq-bypass"
 						aria-pressed={!bypassed}
 						onClick={toggleBypass}
+						title="Switch the whole filter bank in or out for a quick A/B against the unprocessed trace. Each filter keeps its own on/off setting."
 						disabled={filters.length === 0}
 						className={`px-2 py-1 rounded border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
 							bypassed
@@ -33,7 +38,7 @@ export const EqControls = () => {
 								: "border-primary bg-primary/10 text-primary"
 						}`}
 					>
-						{bypassed ? "Bypassed" : "Active"}
+						{bypassed ? "Bank off" : "Bank on"}
 					</button>
 					<button
 						type="button"
@@ -58,7 +63,7 @@ export const EqControls = () => {
 								type="checkbox"
 								checked={f.enabled}
 								onChange={() => toggleFilter(f.id)}
-								title={f.enabled ? "Disable filter" : "Enable filter"}
+								title={f.enabled ? "Turn this one filter off" : "Turn this one filter on"}
 							/>
 							<select
 								value={f.filter_type}
