@@ -14,8 +14,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Octave band centres used by NC and NR.
-pub const OCTAVE_CENTRES_HZ: [f32; 8] =
-    [63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0];
+pub const OCTAVE_CENTRES_HZ: [f32; 8] = [63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0];
 
 /// Level reported for a band containing no FFT bins.
 const EMPTY_BAND_DB: f32 = -200.0;
