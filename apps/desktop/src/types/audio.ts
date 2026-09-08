@@ -153,3 +153,15 @@ export interface Session {
 	settings: SessionSettings;
 	traces: StoredTrace[];
 }
+
+/** Room criteria curve families. */
+export type CurveFamily = "nc" | "nr";
+
+/** A room criteria rating, matching the Rust `RoomCriteriaResult` wire format exactly. */
+export interface RoomCriteriaResult {
+	family: CurveFamily;
+	rating: number;
+	exceeded_band_hz: number;
+	band_levels_db: number[];
+	curve_db: number[];
+}

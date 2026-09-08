@@ -6,10 +6,11 @@ use crate::audio::{
 use crate::dsp::{
     diagnose, export_impulse_response_csv, export_impulse_response_json,
     export_impulse_response_txt, export_transfer_function_csv, export_transfer_function_json,
-    export_transfer_function_txt, generate_standard_frequencies, predict_with_eq, write_to_file,
-    BiquadFilter, DelayFinder, DelayResult, Diagnosis, ExportFormat, ImpulseResponseData,
-    ImpulseResponseProcessor, MeasurementMetadata, MicrophoneCalibration, ReferenceCurve,
-    ReferenceCurveType, SmoothingFraction, SplCalculator, TransferFunctionData,
+    export_transfer_function_txt, generate_standard_frequencies, octave_band_levels,
+    predict_with_eq, rate, write_to_file, BiquadFilter, CurveFamily, DelayFinder, DelayResult,
+    Diagnosis, ExportFormat, ImpulseResponseData, ImpulseResponseProcessor, MeasurementMetadata,
+    MicrophoneCalibration, ReferenceCurve, ReferenceCurveType, RoomCriteriaResult,
+    SmoothingFraction, SplCalculator, TransferFunctionData,
 };
 use parking_lot::Mutex;
 
@@ -405,6 +406,44 @@ pub async fn get_calibration_info(
 }
 
 // ============================================================================
+// Room Criteria Commands
+// ============================================================================
+
+/// Rate the current calibrated spectrum against an NC/NR curve family.
+///
+/// Testable without a `State`, as the other command bodies in this module.
+fn get_room_criteria_inner(
+    engine: &AudioEngine,
+    dsp: &DspState,
+    family: CurveFamily,
+) -> Result<RoomCriteriaResult, String> {
+    let spectrum_dbfs = engine.get_spectrum_data();
+    let sample_rate = engine.sample_rate() as f32;
+    let frequencies: Vec<f32> = (0..spectrum_dbfs.len())
+        .map(|i| i as f32 * sample_rate / FFT_SIZE as f32)
+        .collect();
+
+    // Calibrate under the lock, then drop the guard before the octave-band
+    // summing and rating: no lock held across expensive work.
+    let spl_db = dsp
+        .spl_calculator
+        .lock()
+        .calibrate_spectrum(&spectrum_dbfs, &frequencies);
+
+    let bands = octave_band_levels(&spl_db, &frequencies);
+    Ok(rate(&bands, family))
+}
+
+#[tauri::command]
+pub async fn get_room_criteria(
+    engine: State<'_, AudioEngine>,
+    dsp: State<'_, DspState>,
+    family: CurveFamily,
+) -> Result<RoomCriteriaResult, String> {
+    get_room_criteria_inner(&engine, &dsp, family)
+}
+
+// ============================================================================
 // Export Commands
 // ============================================================================
 
@@ -729,5 +768,13 @@ mod tests {
         let err = tauri::async_runtime::block_on(average_traces(vec![]))
             .expect_err("averaging nothing must fail");
         assert_eq!(err, "nothing to average");
+    }
+
+    #[test]
+    fn room_criteria_command_returns_a_rating() {
+        let engine = AudioEngine::new();
+        let dsp = DspState::new();
+        let result = get_room_criteria_inner(&engine, &dsp, CurveFamily::Nc);
+        assert!(result.is_ok(), "{result:?}");
     }
 }

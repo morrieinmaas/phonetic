@@ -76,6 +76,8 @@ pub fn run() {
             commands::dbfs_to_spl,
             commands::calibrate_with_reference,
             commands::get_calibration_info,
+            // Room criteria commands
+            commands::get_room_criteria,
             // Export commands
             commands::export_transfer_function,
             commands::export_impulse_response,

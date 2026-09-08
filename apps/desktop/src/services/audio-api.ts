@@ -4,11 +4,13 @@ import type {
 	AudioDeviceList,
 	AudioState,
 	BiquadFilter,
+	CurveFamily,
 	Diagnosis,
 	LicenseState,
 	ReferenceCurve,
 	ReferenceCurveInfo,
 	ReferenceCurveType,
+	RoomCriteriaResult,
 	Session,
 	SignalType,
 	SmoothingFraction,
@@ -277,6 +279,17 @@ export const audioApi = {
 		invoke<TransferFunctionData>("predict_eq", { trace, filters, sampleRate }),
 
 	// ========================================================================
+	// Room Criteria
+	// ========================================================================
+
+	/**
+	 * Rate the current calibrated spectrum against an NC/NR curve family.
+	 * @param family - The curve family to rate against
+	 */
+	getRoomCriteria: (family: CurveFamily): Promise<RoomCriteriaResult> =>
+		invoke<RoomCriteriaResult>("get_room_criteria", { family }),
+
+	// ========================================================================
 	// Licensing
 	// ========================================================================
 
@@ -312,11 +325,13 @@ export type {
 	AudioDeviceList,
 	AudioState,
 	BiquadFilter,
+	CurveFamily,
 	FilterType,
 	LicenseState,
 	ReferenceCurve,
 	ReferenceCurveInfo,
 	ReferenceCurveType,
+	RoomCriteriaResult,
 	Session,
 	SessionSettings,
 	SignalType,
