@@ -249,21 +249,6 @@ impl LeqIntegrator {
     }
 }
 
-/// Time weighting applied to a *level* (mean square), as distinct from
-/// `FrequencyWeighting`, which is applied to the *signal*. IEC 61672-1:2013
-/// §5.7 defines Fast (125 ms) and Slow (1 s) as exponential time constants
-/// on the running mean square. `Impulse` is part of this enum for API
-/// completeness -- IEC 61672-1 actually defines it with an asymmetric fast
-/// rise / slow decay that a single-tau exponential detector cannot express,
-/// and `LeqMeter` below only derives a Fast-weighted max, so nothing
-/// constructs this variant yet.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TimeWeighting {
-    Fast,
-    Slow,
-    Impulse,
-}
-
 /// IEC 61672-1:2013 §5.7: Fast time weighting's exponential time constant.
 const FAST_TIME_CONSTANT_SECONDS: f64 = 0.125;
 
