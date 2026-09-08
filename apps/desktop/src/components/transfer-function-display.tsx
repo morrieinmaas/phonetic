@@ -293,26 +293,29 @@ export const TransferFunctionDisplay = ({
 				},
 				{
 					label: "Magnitude (dB)",
-					labelSize: 20,
+					labelSize: 22,
 					labelFont: "bold 13px system-ui, sans-serif",
 					font: "bold 12px system-ui, sans-serif",
 					stroke: labelColor,
 					grid: { stroke: gridColor, width: 1 },
 					ticks: { stroke: tickColor, width: 1, size: 6 },
-					size: 55,
+					// Gutter must hold the rotated title (22), a four-glyph value
+					// like -120 at bold 12px (~34), the gap (8) and the tick (6).
+					// At 55 the title was clipped to "agnitude".
+					size: 72,
 					gap: 8,
 					scale: "magnitude",
 				},
 				{
 					side: 1,
 					label: "Phase (°)",
-					labelSize: 20,
+					labelSize: 22,
 					labelFont: "bold 13px system-ui, sans-serif",
 					font: "bold 12px system-ui, sans-serif",
 					stroke: labelColor,
 					grid: { show: false },
 					ticks: { stroke: tickColor, width: 1, size: 6 },
-					size: 55,
+					size: 72,
 					gap: 8,
 					scale: "phase",
 					splits: [-180, -90, 0, 90, 180],

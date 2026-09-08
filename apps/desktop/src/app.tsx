@@ -329,9 +329,9 @@ export const App = () => {
 					</aside>
 
 					{/* Main visualization area */}
-					<div className="flex flex-1 flex-col gap-4 min-h-0">
+					<div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
 						{/* Spectrum analyzer - takes slightly more space */}
-						<div className="glass flex min-h-[200px] flex-[1.2] flex-col rounded-lg p-4">
+						<div className="glass flex min-h-[360px] flex-[1.2] flex-col rounded-lg p-4">
 							{/* Renderer toggle */}
 							<div className="flex items-center justify-end gap-2 mb-2 flex-shrink-0">
 								<span className="text-xs text-muted-foreground">Renderer:</span>
@@ -381,7 +381,7 @@ export const App = () => {
 						</div>
 
 						{/* Secondary view - Transfer function or Spectrogram */}
-						<div className="glass flex min-h-[200px] flex-1 flex-col rounded-lg p-4">
+						<div className="glass flex min-h-[420px] flex-1 flex-col rounded-lg p-4">
 							{/* View toggle */}
 							<div className="flex items-center justify-end gap-2 mb-2 flex-shrink-0">
 								<span className="text-xs text-muted-foreground">View:</span>
