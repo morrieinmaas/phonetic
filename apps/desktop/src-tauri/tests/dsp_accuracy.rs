@@ -614,3 +614,38 @@ fn smoothing_setting_is_applied_to_multi_window_output() {
         "smoothing should reduce roughness: raw {r_raw:.4}, smoothed {r_smooth:.4}"
     );
 }
+
+/// The engine must not hold the multi-window lock while smoothing: the audio
+/// callback needs it every buffer, and a UI read that blocks it is a dropout.
+/// A snapshot is the whole point, so it must survive the processor being
+/// mutated afterwards and still produce the same answer as the fused call.
+#[test]
+fn multi_window_snapshot_detaches_from_the_processor() {
+    use phonetic_lib::dsp::{MultiWindowProcessor, SmoothingFraction};
+
+    let x = noise(65_536 * 2, 31);
+    let y: Vec<f32> = x.iter().map(|s| s * 0.5).collect();
+
+    let mut mw = MultiWindowProcessor::new(FS);
+    mw.set_smoothing(SmoothingFraction::Octave6);
+    mw.process(&y, &x);
+
+    let snapshot = mw.snapshot();
+    let fused = mw.get_data();
+
+    // Keep feeding the processor after the snapshot was taken, exactly as the
+    // audio thread would while the UI is still converting.
+    let more = noise(65_536, 32);
+    mw.process(&more, &more);
+
+    let detached = snapshot.into_data();
+    assert_eq!(detached.frequencies.len(), fused.frequencies.len());
+    for i in 0..detached.magnitude_db.len() {
+        assert!(
+            (detached.magnitude_db[i] - fused.magnitude_db[i]).abs() < 1e-4,
+            "bin {i}: snapshot {:.6} dB vs fused {:.6} dB",
+            detached.magnitude_db[i],
+            fused.magnitude_db[i]
+        );
+    }
+}

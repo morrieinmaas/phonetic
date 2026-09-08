@@ -165,13 +165,16 @@ impl MultiWindowProcessor {
         (h, coh)
     }
 
-    pub fn get_data(&self) -> TransferFunctionData {
+    /// Stitch the per-band processors into raw complex values.
+    ///
+    /// This is the only part that needs the processors, so it is the only part
+    /// that has to run while the engine's lock is held. It is O(n) with a small
+    /// constant: a bin lookup and a lerp per output point.
+    pub fn snapshot(&self) -> MultiWindowSnapshot {
         let n = self.frequencies.len();
-        let mut magnitude_db = vec![-120.0; n];
-        let mut phase_deg = vec![0.0; n];
+        let mut stitched = vec![Complex::new(0.0, 0.0); n];
         let mut coherence = vec![0.0; n];
 
-        let mut stitched = vec![Complex::new(0.0, 0.0); n];
         for i in 0..n {
             let p = &self.processors[self.source[i]];
             let (h, coh) = Self::sample_at(p, self.frequencies[i], self.sample_rate);
@@ -179,16 +182,49 @@ impl MultiWindowProcessor {
             coherence[i] = coh.clamp(0.0, 1.0);
         }
 
-        let stitched = smooth_complex(&stitched, &self.frequencies, self.smoothing);
+        MultiWindowSnapshot {
+            stitched,
+            coherence,
+            frequencies: self.frequencies.clone(),
+            smoothing: self.smoothing,
+        }
+    }
 
+    pub fn get_data(&self) -> TransferFunctionData {
+        self.snapshot().into_data()
+    }
+}
+
+/// Stitched values taken from the processors, ready to be turned into display
+/// data without holding any lock.
+///
+/// The transform below — fractional-octave smoothing over ~478 points, the dB
+/// and phase conversion, and the group delay — is far more expensive than the
+/// stitch that produced it. Running it inside the engine's lock made the
+/// real-time audio callback wait on a UI read, which is a dropout on a show.
+pub struct MultiWindowSnapshot {
+    stitched: Vec<Complex<f32>>,
+    coherence: Vec<f32>,
+    frequencies: Vec<f32>,
+    smoothing: SmoothingFraction,
+}
+
+impl MultiWindowSnapshot {
+    /// Smooth and convert to display units. Pure; holds nothing.
+    pub fn into_data(self) -> TransferFunctionData {
+        let smoothed = smooth_complex(&self.stitched, &self.frequencies, self.smoothing);
+        let n = self.frequencies.len();
+
+        let mut magnitude_db = vec![-120.0; n];
+        let mut phase_deg = vec![0.0; n];
         for i in 0..n {
-            let mag = stitched[i].norm();
+            let mag = smoothed[i].norm();
             magnitude_db[i] = if mag > 1e-10 {
                 20.0 * mag.log10()
             } else {
                 -120.0
             };
-            phase_deg[i] = stitched[i].arg().to_degrees();
+            phase_deg[i] = smoothed[i].arg().to_degrees();
         }
 
         let group_delay_ms = group_delay_from_log_axis(&self.frequencies, &phase_deg);
@@ -196,9 +232,9 @@ impl MultiWindowProcessor {
         TransferFunctionData {
             magnitude_db,
             phase_deg,
-            coherence,
+            coherence: self.coherence,
             group_delay_ms,
-            frequencies: self.frequencies.clone(),
+            frequencies: self.frequencies,
         }
     }
 }

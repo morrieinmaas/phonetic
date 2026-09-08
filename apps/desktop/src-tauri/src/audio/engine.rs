@@ -563,7 +563,11 @@ impl AudioEngine {
 
     pub fn get_transfer_function_data(&self) -> TransferFunctionData {
         if self.multi_window_enabled.load(Ordering::Relaxed) {
-            self.multi_window_processor.lock().get_data()
+            // Take a cheap stitch under the lock, release it, then do the
+            // expensive smoothing and conversion. Doing that work while holding
+            // the lock made the real-time audio callback wait on a UI read.
+            let snapshot = self.multi_window_processor.lock().snapshot();
+            snapshot.into_data()
         } else {
             self.transfer_function_processors[0].lock().get_data()
         }
