@@ -31,9 +31,9 @@ pub enum FrequencyWeighting {
 /// "NaN dB" before the first block arrives.
 const SILENCE_FLOOR_DB: f32 = -120.0;
 
-/// IEC 61672-1 pole frequencies (Hz) shared by the A- and C-weighting
-/// analog prototypes (the classic four corner frequencies of the standard
-/// A/C curves).
+/// IEC 61672-1:2013 Annex E (normative), clause E.4.1, equation (E.1): pole
+/// frequencies (Hz) of the A- and C-weighting analog prototypes (the
+/// classic four corner frequencies of the standard A/C curves).
 const F1_HZ: f64 = 20.598_997;
 const F2_HZ: f64 = 107.652_65;
 const F3_HZ: f64 = 737.862_23;
@@ -61,9 +61,12 @@ struct Biquad {
 }
 
 impl Biquad {
-    /// Bilinear-transforms (no prewarp, matching the reference A/C designs)
-    /// an analog 2nd-order section `(n2*s^2 + n1*s + n0) / (d2*s^2 + d1*s +
-    /// d0)` into a digital biquad at `sample_rate`.
+    /// Bilinear-transforms an analog 2nd-order section `(n2*s^2 + n1*s +
+    /// n0) / (d2*s^2 + d1*s + d0)` into a digital biquad at `sample_rate`.
+    /// Callers must pass already frequency-prewarped pole/zero frequencies
+    /// (see `prewarp` below) -- this function itself performs the plain
+    /// substitution `s = k*(z-1)/(z+1)`, `k = 2*sample_rate`, with no
+    /// warping correction of its own.
     fn from_analog_section(
         n2: f64,
         n1: f64,
@@ -110,15 +113,30 @@ impl Biquad {
     }
 }
 
+/// Frequency-prewarps an analog angular frequency for the bilinear
+/// transform: substitutes `omega' = (2/T)*tan(omega*T/2)`, `T =
+/// 1/sample_rate`, so that after `Biquad::from_analog_section`'s plain
+/// `s = (2/T)*(z-1)/(z+1)` substitution, the resulting digital pole/zero
+/// lands back at the intended physical frequency `omega` instead of a
+/// frequency-compressed one. Without this, the bilinear transform's
+/// inherent nonlinear (tan) warping pushes poles progressively lower as
+/// they approach Nyquist -- negligible for A/C's low corner frequencies but
+/// a multi-dB error for the ~12.2 kHz corner near the top of the audio
+/// band (see IEC_A_WEIGHTING_DB / IEC_C_WEIGHTING_DB tests below).
+fn prewarp(omega: f64, sample_rate: f32) -> f64 {
+    let t = 1.0 / sample_rate as f64;
+    (2.0 / t) * (omega * t / 2.0).tan()
+}
+
 /// A-weighting analog prototype (IEC 61672-1) factors into three real
 /// second-order sections: `(s+w1)^2`, `(s+w4)^2` and `(s+w2)(s+w3)` in the
 /// denominator, with the `gain * s^4` numerator split as `s^2 * (gain*s^2)
 /// * 1` across them.
 fn a_weighting_biquads(sample_rate: f32) -> [Biquad; 3] {
-    let w1 = 2.0 * PI * F1_HZ;
-    let w2 = 2.0 * PI * F2_HZ;
-    let w3 = 2.0 * PI * F3_HZ;
-    let w4 = 2.0 * PI * F4_HZ;
+    let w1 = prewarp(2.0 * PI * F1_HZ, sample_rate);
+    let w2 = prewarp(2.0 * PI * F2_HZ, sample_rate);
+    let w3 = prewarp(2.0 * PI * F3_HZ, sample_rate);
+    let w4 = prewarp(2.0 * PI * F4_HZ, sample_rate);
     let gain = w4 * w4 * 10f64.powf(A1000_DB / 20.0);
 
     [
@@ -132,8 +150,8 @@ fn a_weighting_biquads(sample_rate: f32) -> [Biquad; 3] {
 /// second-order sections: `(s+w1)^2` and `(s+w4)^2` in the denominator,
 /// with the `gain * s^2` numerator on the latter.
 fn c_weighting_biquads(sample_rate: f32) -> [Biquad; 2] {
-    let w1 = 2.0 * PI * F1_HZ;
-    let w4 = 2.0 * PI * F4_HZ;
+    let w1 = prewarp(2.0 * PI * F1_HZ, sample_rate);
+    let w4 = prewarp(2.0 * PI * F4_HZ, sample_rate);
     let gain = w4 * w4 * 10f64.powf(C1000_DB / 20.0);
 
     [
@@ -339,5 +357,128 @@ mod tests {
         let leq = LeqIntegrator::new(FS, FrequencyWeighting::Z);
         assert!(leq.leq_db().is_finite(), "got {}", leq.leq_db());
         assert_eq!(leq.sample_count(), 0);
+    }
+
+    /// IEC 61672-1:2013 Table 3, A-weighting relative response (dB).
+    /// Verified 2026-09-08 against the `python-acoustics` library's
+    /// `iec_61672_1_2013.csv` (a maintained reimplementation of the
+    /// standard's table:
+    /// <https://github.com/python-acoustics/python-acoustics/blob/master/acoustics/data/iec_61672_1_2013.csv>)
+    /// and cross-checked against NTi Audio's published octave-band
+    /// weighting table:
+    /// <https://www.nti-audio.com/en/support/know-how/frequency-weightings-for-sound-level-measurements>.
+    /// Both sources agree exactly with each other and with the values in
+    /// the task brief for A-weighting.
+    const IEC_A_WEIGHTING_DB: &[(f32, f32)] = &[
+        (20.0, -50.5),
+        (31.5, -39.4),
+        (63.0, -26.2),
+        (100.0, -19.1),
+        (1_000.0, 0.0),
+        (4_000.0, 1.0),
+        (8_000.0, -1.1),
+        (10_000.0, -2.5),
+        (16_000.0, -6.6),
+    ];
+
+    /// IEC 61672-1:2013 Table 3, C-weighting relative response (dB), same
+    /// sources as `IEC_A_WEIGHTING_DB`.
+    ///
+    /// NOTE: the task brief that seeded this test quoted C(100 Hz) as
+    /// roughly -0.2 dB, C(8 kHz) as roughly -0.8 dB and C(20 Hz) as roughly
+    /// -8.5 dB. Both sources above agree the table actually reads C(100 Hz)
+    /// = -0.3 dB, and -0.8 dB / -8.5 dB are the C(4 kHz) / C(16 kHz) values,
+    /// not C(8 kHz) / C(20 Hz) -- the correct C(8 kHz) is -3.0 dB and the
+    /// correct C(20 Hz) is -6.2 dB. This disagreement is reported rather
+    /// than split/averaged; the values below are the verified ones.
+    const IEC_C_WEIGHTING_DB: &[(f32, f32)] =
+        &[(20.0, -6.2), (100.0, -0.3), (1_000.0, 0.0), (8_000.0, -3.0)];
+
+    /// Per-frequency tolerance for the IEC-table assertions below: 1.0 dB
+    /// everywhere except 16 kHz. Prewarping (see `prewarp` in the parent
+    /// module) corrects each pole/zero's *position*, but the bilinear
+    /// transform still warps the *evaluation* frequency itself, and at
+    /// 16 kHz that warping is severe -- 16 kHz is 2/3 of Nyquist at 48 kHz
+    /// and closer still at 44.1 kHz. Prewarping roughly halves the 16 kHz
+    /// error (from -6.54/-8.63 dB unprewarped to -3.12/-4.24 dB measured
+    /// here -- see task-1b-report.md) but cannot eliminate it with a
+    /// bilinear-transform design. 4.5 dB is the tightest bound that clears
+    /// both sample rates with margin; it is not a blanket loosening -- every
+    /// other frequency in the table, including the C-weighting check at
+    /// 8 kHz, is still held to 1.0 dB.
+    fn tolerance_db(freq_hz: f32) -> f32 {
+        if freq_hz >= 16_000.0 {
+            4.5
+        } else {
+            1.0
+        }
+    }
+
+    fn sine_at(freq: f32, amplitude: f32, seconds: f32, sample_rate: f32) -> Vec<f32> {
+        let n = (sample_rate * seconds) as usize;
+        (0..n)
+            .map(|i| amplitude * (2.0 * std::f32::consts::PI * freq * i as f32 / sample_rate).sin())
+            .collect()
+    }
+
+    /// Weighted-minus-flat level in dB at `freq_hz`: pushes a sine through a
+    /// Z-weighted and a `weighting`-weighted integrator and differences
+    /// their `leq_db()`. This is the same measurement method used to
+    /// produce the error table in the task brief.
+    fn measured_weighting_db(freq_hz: f32, sample_rate: f32, weighting: FrequencyWeighting) -> f32 {
+        let signal = sine_at(freq_hz, 0.5, 2.0, sample_rate);
+        let mut flat = LeqIntegrator::new(sample_rate, FrequencyWeighting::Z);
+        flat.push(&signal);
+        let mut weighted = LeqIntegrator::new(sample_rate, weighting);
+        weighted.push(&signal);
+        weighted.leq_db() - flat.leq_db()
+    }
+
+    #[test]
+    fn a_weighting_matches_iec_61672_1_table_at_48khz() {
+        for &(freq, expected) in IEC_A_WEIGHTING_DB {
+            let measured = measured_weighting_db(freq, 48_000.0, FrequencyWeighting::A);
+            let tolerance = tolerance_db(freq);
+            assert!(
+                (measured - expected).abs() < tolerance,
+                "A-weighting at {freq} Hz @ 48 kHz: expected {expected:.1} dB (+/-{tolerance} dB), got {measured:.2} dB"
+            );
+        }
+    }
+
+    #[test]
+    fn a_weighting_matches_iec_61672_1_table_at_44_1khz() {
+        for &(freq, expected) in IEC_A_WEIGHTING_DB {
+            let measured = measured_weighting_db(freq, 44_100.0, FrequencyWeighting::A);
+            let tolerance = tolerance_db(freq);
+            assert!(
+                (measured - expected).abs() < tolerance,
+                "A-weighting at {freq} Hz @ 44.1 kHz: expected {expected:.1} dB (+/-{tolerance} dB), got {measured:.2} dB"
+            );
+        }
+    }
+
+    #[test]
+    fn c_weighting_matches_iec_61672_1_table_at_48khz() {
+        for &(freq, expected) in IEC_C_WEIGHTING_DB {
+            let measured = measured_weighting_db(freq, 48_000.0, FrequencyWeighting::C);
+            let tolerance = tolerance_db(freq);
+            assert!(
+                (measured - expected).abs() < tolerance,
+                "C-weighting at {freq} Hz @ 48 kHz: expected {expected:.1} dB (+/-{tolerance} dB), got {measured:.2} dB"
+            );
+        }
+    }
+
+    #[test]
+    fn c_weighting_matches_iec_61672_1_table_at_44_1khz() {
+        for &(freq, expected) in IEC_C_WEIGHTING_DB {
+            let measured = measured_weighting_db(freq, 44_100.0, FrequencyWeighting::C);
+            let tolerance = tolerance_db(freq);
+            assert!(
+                (measured - expected).abs() < tolerance,
+                "C-weighting at {freq} Hz @ 44.1 kHz: expected {expected:.1} dB (+/-{tolerance} dB), got {measured:.2} dB"
+            );
+        }
     }
 }
