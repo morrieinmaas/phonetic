@@ -79,6 +79,19 @@ just test-rust                                  # full suite
 cargo test --test dsp_accuracy -- --nocapture   # accuracy suite only
 ```
 
+## Headless measurement
+
+Phonetic ships a scriptable CLI, which no other analyzer in this category offers.
+Measure from a recording, verify an install from a script, or regression-test a room
+after a change:
+
+```bash
+phonetic-cli measure --file room.wav --reference-channel 0 --measurement-channel 1
+phonetic-cli measure --file room.wav --format csv > room.csv
+phonetic-cli devices
+phonetic-cli selftest        # verify the DSP against a known signal
+```
+
 ## Tech Stack
 
 - **Backend**: Rust (Tauri 2 + CPAL + realfft)
