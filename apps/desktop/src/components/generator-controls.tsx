@@ -71,7 +71,7 @@ export const GeneratorControls = ({
 			</h3>
 
 			{/* Signal type buttons */}
-			<div className="grid grid-cols-2 gap-2">
+			<div data-testid="generator-signal-type" className="grid grid-cols-2 gap-2">
 				{SIGNAL_TYPES.map(({ value, label }) => (
 					<button
 						type="button"
@@ -147,6 +147,7 @@ export const GeneratorControls = ({
 			{/* Start/Stop button */}
 			<button
 				type="button"
+				data-testid="generator-toggle"
 				onClick={isActive ? onStop : onStart}
 				disabled={disabled}
 				className={`w-full rounded-md py-2.5 text-sm font-semibold transition-colors ${

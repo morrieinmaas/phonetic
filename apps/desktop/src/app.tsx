@@ -177,6 +177,7 @@ export const App = () => {
 				<div className="flex items-center gap-2">
 					<button
 						type="button"
+						data-testid="settings-open"
 						onClick={() => setSettingsOpen(true)}
 						className="p-2 rounded-md hover:bg-muted transition-colors"
 						aria-label="Open settings"
@@ -215,6 +216,7 @@ export const App = () => {
 							<>
 								<DeviceSelector
 									label="Input"
+									testId="input-device-select"
 									devices={devices.inputs}
 									selectedDeviceId={selectedInputDevice}
 									defaultDeviceId={devices.default_input}
