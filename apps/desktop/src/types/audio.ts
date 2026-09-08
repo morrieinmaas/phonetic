@@ -90,3 +90,22 @@ export interface StoredTrace {
 
 /** Trace slot identifiers for quick A/B comparison */
 export type TraceSlot = "A" | "B" | "C" | "D";
+
+/** Settings captured alongside a saved session */
+export interface SessionSettings {
+	sample_rate: number;
+	fft_size: number;
+	multi_window: boolean;
+	smoothing: string;
+	delay_samples: number;
+	max_averages: number;
+}
+
+/** A measurement session: settings plus the traces captured under them */
+export interface Session {
+	version: number;
+	created_at: string;
+	name: string;
+	settings: SessionSettings;
+	traces: StoredTrace[];
+}

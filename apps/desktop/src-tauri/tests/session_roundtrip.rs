@@ -3,7 +3,10 @@ use phonetic_lib::session::{
 };
 
 fn tmp(name: &str) -> String {
-    std::env::temp_dir().join(name).to_string_lossy().into_owned()
+    std::env::temp_dir()
+        .join(name)
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn example() -> Session {
@@ -45,7 +48,10 @@ fn session_file_is_human_readable() {
     save_session_to_path(&path, &example()).unwrap();
     let text = std::fs::read_to_string(&path).unwrap();
 
-    assert!(text.contains("\"name\": \"Main PA — stalls\""), "should be pretty-printed");
+    assert!(
+        text.contains("\"name\": \"Main PA — stalls\""),
+        "should be pretty-printed"
+    );
     assert!(text.contains('\n'), "should span multiple lines");
     assert!(text.lines().count() > 5);
 

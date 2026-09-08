@@ -47,8 +47,7 @@ pub fn save_session_to_path(path: &str, session: &Session) -> Result<(), String>
 /// Read a session, refusing anything this build cannot understand.
 pub fn load_session_from_path(path: &str) -> Result<Session, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("read {path}: {e}"))?;
-    let session: Session =
-        serde_json::from_str(&text).map_err(|e| format!("parse {path}: {e}"))?;
+    let session: Session = serde_json::from_str(&text).map_err(|e| format!("parse {path}: {e}"))?;
 
     if session.version > SESSION_VERSION {
         return Err(format!(

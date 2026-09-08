@@ -13,6 +13,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             log::info!("Phonetic setup starting...");
             println!("Phonetic setup starting...");
@@ -78,6 +79,9 @@ pub fn run() {
             commands::measure_wav_file,
             // Virtual EQ commands
             commands::predict_eq,
+            // Session save/load commands
+            commands::save_session,
+            commands::load_session,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
