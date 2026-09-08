@@ -9,6 +9,9 @@ use std::thread;
 use super::deinterleave::ChannelBuffers;
 use super::generator::{Generator, SignalType};
 use super::realtime::configure_audio_thread;
+use super::routing::Routing;
+#[cfg(test)]
+use super::routing::{MeasurementPair, ReferenceSource};
 use crate::dsp::{
     FftProcessor, MultiWindowProcessor, RigSnapshot, SmoothingFraction, TransferFunctionData,
     TransferFunctionProcessor,
@@ -138,6 +141,11 @@ pub struct AudioEngine {
     exclusive_mode: Arc<AtomicBool>,
     /// Rolling level and delay statistics, updated from the input callback.
     level_stats: Arc<Mutex<LevelStats>>,
+    // Current channel routing. The Mutex guards only the pointer swap; readers
+    // (including the real-time callback) clone the inner Arc — one atomic
+    // increment, no lock held across any work — so the UI thread publishing a
+    // new routing can never block the audio thread. See commit d2ac837.
+    routing: Arc<Mutex<Arc<Routing>>>,
 }
 
 // SAFETY: AudioEngine is Send + Sync because:
@@ -145,7 +153,7 @@ pub struct AudioEngine {
 //   are inherently thread-safe via std::sync::atomic
 // - All Mutex-wrapped fields (input_device_name, output_device_name, fft_processor,
 //   transfer_function_processors, multi_window_processor, generator, thread_handle,
-//   reference_buffer) use parking_lot::Mutex which is Send + Sync
+//   reference_buffer, routing) use parking_lot::Mutex which is Send + Sync
 // - Arc provides thread-safe reference counting
 // The thread_handle stores a JoinHandle which is Send, and we only mutate it under a Mutex lock.
 // cpal::Stream is not Send+Sync, but we don't store streams - they live in the audio thread only.
@@ -187,6 +195,7 @@ impl AudioEngine {
             backend: Arc::new(AtomicU8::new(AudioBackend::default() as u8)),
             exclusive_mode: Arc::new(AtomicBool::new(false)),
             level_stats: Arc::new(Mutex::new(LevelStats::default())),
+            routing: Arc::new(Mutex::new(Arc::new(Routing::default()))),
         }
     }
 
@@ -722,6 +731,29 @@ impl AudioEngine {
             fft_size: self.fft_size(),
         }
     }
+
+    /// Replace the channel routing. Validated against `MAX_INPUT_CHANNELS`,
+    /// not the engine's current `input_channel_count`: routing is normally
+    /// configured before a stream (and its real channel count) exists, so
+    /// validating against the live count would reject every pair beyond
+    /// channel 0 during ordinary setup. Device-specific validation belongs
+    /// at stream start.
+    ///
+    /// On success the new `Routing` is published by swapping an `Arc` under
+    /// a lock held only for the pointer write — never across validation or
+    /// any other work — so this can never block the real-time callback. On
+    /// failure the previous routing is left untouched.
+    pub fn set_routing(&self, routing: Routing) -> Result<(), String> {
+        routing.validate(MAX_INPUT_CHANNELS)?;
+        *self.routing.lock() = Arc::new(routing);
+        Ok(())
+    }
+
+    /// Current channel routing. Cloning the `Arc` is one atomic increment —
+    /// cheap enough to call once per audio callback.
+    pub fn routing(&self) -> Arc<Routing> {
+        self.routing.lock().clone()
+    }
 }
 
 impl Default for AudioEngine {
@@ -1212,6 +1244,113 @@ mod tests {
         assert!(
             elapsed.as_millis() < 500,
             "AudioEngine::new() took {elapsed:?} with {MAX_INPUT_CHANNELS} channels"
+        );
+    }
+
+    /// Routing must be swappable while the engine believes it is running,
+    /// without the setter blocking on anything expensive.
+    #[test]
+    fn routing_can_be_replaced_and_read_back() {
+        let engine = AudioEngine::new();
+        assert_eq!(engine.routing().pairs.len(), 0);
+
+        let routing = Routing {
+            pairs: vec![MeasurementPair {
+                id: "a".into(),
+                name: "Main L".into(),
+                measurement_channel: 0,
+                reference: ReferenceSource::Generator,
+                delay_samples: 0,
+                calibration_offset_db: 0.0,
+                enabled: true,
+            }],
+        };
+        engine.set_routing(routing).unwrap();
+        assert_eq!(engine.routing().pairs.len(), 1);
+        assert_eq!(engine.routing().pairs[0].name, "Main L");
+    }
+
+    /// Invalid routing is refused and the previous routing survives — a typo in
+    /// the matrix must not silently stop a running measurement.
+    #[test]
+    fn invalid_routing_is_refused_and_the_old_one_survives() {
+        let engine = AudioEngine::new();
+        let good = Routing {
+            pairs: vec![MeasurementPair {
+                id: "a".into(),
+                name: "Main L".into(),
+                measurement_channel: 0,
+                reference: ReferenceSource::Generator,
+                delay_samples: 0,
+                calibration_offset_db: 0.0,
+                enabled: true,
+            }],
+        };
+        engine.set_routing(good).unwrap();
+
+        let bad = Routing {
+            pairs: vec![MeasurementPair {
+                id: "b".into(),
+                name: "Bad".into(),
+                measurement_channel: 999,
+                reference: ReferenceSource::Generator,
+                delay_samples: 0,
+                calibration_offset_db: 0.0,
+                enabled: true,
+            }],
+        };
+        assert!(engine.set_routing(bad).is_err());
+        assert_eq!(
+            engine.routing().pairs[0].name,
+            "Main L",
+            "the good routing was lost"
+        );
+    }
+
+    /// A reader holding an Arc keeps reading a consistent routing while a
+    /// writer swaps in a new one — the property the callback depends on.
+    #[test]
+    fn a_held_routing_is_unaffected_by_a_concurrent_swap() {
+        let engine = AudioEngine::new();
+        engine
+            .set_routing(Routing {
+                pairs: vec![MeasurementPair {
+                    id: "a".into(),
+                    name: "First".into(),
+                    measurement_channel: 0,
+                    reference: ReferenceSource::Generator,
+                    delay_samples: 0,
+                    calibration_offset_db: 0.0,
+                    enabled: true,
+                }],
+            })
+            .unwrap();
+
+        let held = engine.routing();
+        engine.set_routing(Routing { pairs: vec![] }).unwrap();
+
+        assert_eq!(
+            held.pairs.len(),
+            1,
+            "the held snapshot changed under the reader"
+        );
+        assert_eq!(engine.routing().pairs.len(), 0);
+    }
+
+    /// Reading routing must be cheap enough to do per callback. This is not a
+    /// benchmark, it is a tripwire for someone replacing the Arc clone with
+    /// something that allocates.
+    #[test]
+    fn reading_routing_is_cheap() {
+        let engine = AudioEngine::new();
+        let start = std::time::Instant::now();
+        for _ in 0..100_000 {
+            let _ = engine.routing();
+        }
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed.as_millis() < 100,
+            "100k routing reads took {elapsed:?} — this runs per audio callback"
         );
     }
 }
