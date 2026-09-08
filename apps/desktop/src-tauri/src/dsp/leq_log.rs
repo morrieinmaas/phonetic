@@ -18,7 +18,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::{format_utc, LeqMetrics};
 
-const CSV_HEADER: &str = "timestamp,leq_db,laeq_db,lceq_db,lafmax_db,lapeak_db,elapsed_seconds";
+/// The interval column matters: without it a row of LAeq values is ambiguous,
+/// because a 1-second average and a 15-minute average look identical. It is a
+/// per-row column rather than a header comment so that a log appended across
+/// sessions with different intervals stays truthful.
+const CSV_HEADER: &str =
+    "timestamp,interval_seconds,leq_db,laeq_db,lceq_db,lafmax_db,lapeak_db,elapsed_seconds";
 
 /// Appends completed LEQ intervals to a CSV file, on the command side --
 /// never in the audio callback, where file I/O would be a dropout.
@@ -65,8 +70,9 @@ impl LeqLogger {
 
         writeln!(
             self.file,
-            "{},{:.2},{:.2},{:.2},{:.2},{:.2},{:.3}",
+            "{},{:.3},{:.2},{:.2},{:.2},{:.2},{:.2},{:.3}",
             format_utc(secs_since_epoch),
+            self.interval_seconds,
             metrics.leq_db,
             metrics.laeq_db,
             metrics.lceq_db,
@@ -85,12 +91,6 @@ impl LeqLogger {
 
     pub fn path(&self) -> &Path {
         &self.path
-    }
-
-    /// The interval, in seconds, this log was configured to record at --
-    /// the caller's cadence for calling `record`, not enforced here.
-    pub fn interval_seconds(&self) -> f64 {
-        self.interval_seconds
     }
 }
 
@@ -212,5 +212,37 @@ mod tests {
             message.contains("nonexistent-dir-xyz"),
             "unhelpful error: {message}"
         );
+    }
+
+    /// Each row carries the integration interval it represents. Without it a
+    /// column of LAeq values is ambiguous evidence: a 1-second average and a
+    /// 15-minute average are indistinguishable on the page.
+    #[test]
+    fn each_row_states_the_interval_it_covers() {
+        let path = temp_path("interval-column");
+        let mut logger = LeqLogger::new(path.clone(), 60.0).unwrap();
+        logger
+            .record(&sample_metrics(85.0), SystemTime::now())
+            .unwrap();
+
+        let contents = fs::read_to_string(&path).unwrap();
+        let mut lines = contents.lines();
+        let header = lines.next().expect("header");
+        let row = lines.next().expect("row");
+
+        let interval_column = header
+            .split(',')
+            .position(|column| column == "interval_seconds")
+            .expect("header names interval_seconds");
+
+        let value: f64 = row
+            .split(',')
+            .nth(interval_column)
+            .expect("row has an interval cell")
+            .parse()
+            .expect("interval parses as a number");
+        assert!((value - 60.0).abs() < 1e-6, "row reported interval {value}");
+
+        let _ = fs::remove_file(&path);
     }
 }
