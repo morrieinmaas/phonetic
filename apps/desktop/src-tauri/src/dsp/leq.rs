@@ -12,6 +12,8 @@
 
 use std::f64::consts::PI;
 
+use serde::{Deserialize, Serialize};
+
 /// Frequency weighting applied before energy averaging.
 ///
 /// `Z` (zero/unweighted) passes samples through unchanged. `A` and `C` are
@@ -244,6 +246,166 @@ impl LeqIntegrator {
         self.sum_squares = 0.0;
         self.count = 0;
         self.filter.reset_state();
+    }
+}
+
+/// Time weighting applied to a *level* (mean square), as distinct from
+/// `FrequencyWeighting`, which is applied to the *signal*. IEC 61672-1:2013
+/// §5.7 defines Fast (125 ms) and Slow (1 s) as exponential time constants
+/// on the running mean square. `Impulse` is part of this enum for API
+/// completeness -- IEC 61672-1 actually defines it with an asymmetric fast
+/// rise / slow decay that a single-tau exponential detector cannot express,
+/// and `LeqMeter` below only derives a Fast-weighted max, so nothing
+/// constructs this variant yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimeWeighting {
+    Fast,
+    Slow,
+    Impulse,
+}
+
+/// IEC 61672-1:2013 §5.7: Fast time weighting's exponential time constant.
+const FAST_TIME_CONSTANT_SECONDS: f64 = 0.125;
+
+/// Exponential (single-pole) time-weighted mean-square detector. IEC
+/// 61672-1 §5.7 defines a time-weighted level as a first-order lowpass on
+/// the squared signal: `d(y)/dt = (x^2 - y) / tau`. Discretised at the
+/// meter's sample rate this is a one-pole IIR, `y[n] = a*y[n-1] +
+/// (1-a)*x[n]^2` with `a = exp(-T/tau)`, `T = 1/sample_rate`.
+#[derive(Debug, Clone, Copy)]
+struct ExponentialLevelDetector {
+    alpha: f32,
+    mean_square: f32,
+}
+
+impl ExponentialLevelDetector {
+    fn new(time_constant_seconds: f64, sample_rate: f32) -> Self {
+        let period_seconds = 1.0 / sample_rate as f64;
+        Self {
+            alpha: (-period_seconds / time_constant_seconds).exp() as f32,
+            mean_square: 0.0,
+        }
+    }
+
+    /// Folds one already-weighted sample into the running mean square and
+    /// returns the updated value.
+    #[inline]
+    fn push(&mut self, weighted_sample: f32) -> f32 {
+        self.mean_square =
+            self.alpha * self.mean_square + (1.0 - self.alpha) * weighted_sample * weighted_sample;
+        self.mean_square
+    }
+
+    fn reset(&mut self) {
+        self.mean_square = 0.0;
+    }
+}
+
+fn mean_square_to_db(mean_square: f32) -> f32 {
+    if mean_square <= 0.0 {
+        return SILENCE_FLOOR_DB;
+    }
+    10.0 * mean_square.log10()
+}
+
+fn amplitude_to_db(amplitude: f32) -> f32 {
+    if amplitude <= 0.0 {
+        return SILENCE_FLOOR_DB;
+    }
+    20.0 * amplitude.log10()
+}
+
+/// Snapshot of every metric `LeqMeter` tracks, taken at read time. Crosses
+/// the Rust/TS boundary in a later task, so field names stay snake_case --
+/// never add `#[serde(rename_all = "camelCase")]` here.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct LeqMetrics {
+    pub leq_db: f32,
+    pub laeq_db: f32,
+    pub lceq_db: f32,
+    pub lafmax_db: f32,
+    pub lapeak_db: f32,
+    pub elapsed_seconds: f64,
+}
+
+/// Combined LEQ, time-weighted max and peak meter. Runs three `LeqIntegrator`s
+/// side by side (Z, A, C -- reusing the same weighting cascade as above) plus
+/// a fourth, independent A-weighting filter that feeds two detectors:
+///
+/// - `lafmax_db`: the A-weighted signal's squared level passed through a
+///   Fast (125 ms) exponential detector, then maxed over time. This is a
+///   *time-weighted* measurement.
+/// - `lapeak_db`: the largest instantaneous `|A-weighted sample|` seen, with
+///   no time weighting at all.
+///
+/// Peak and max are different measurements -- conflating them is the
+/// classic error this type exists to avoid.
+pub struct LeqMeter {
+    leq: LeqIntegrator,
+    laeq: LeqIntegrator,
+    lceq: LeqIntegrator,
+    a_filter: WeightingFilter,
+    fast_detector: ExponentialLevelDetector,
+    fast_max_mean_square: f32,
+    peak_abs: f32,
+    sample_rate: f32,
+    sample_count: u64,
+}
+
+impl LeqMeter {
+    pub fn new(sample_rate: f32) -> Self {
+        Self {
+            leq: LeqIntegrator::new(sample_rate, FrequencyWeighting::Z),
+            laeq: LeqIntegrator::new(sample_rate, FrequencyWeighting::A),
+            lceq: LeqIntegrator::new(sample_rate, FrequencyWeighting::C),
+            a_filter: WeightingFilter::new(FrequencyWeighting::A, sample_rate),
+            fast_detector: ExponentialLevelDetector::new(FAST_TIME_CONSTANT_SECONDS, sample_rate),
+            fast_max_mean_square: 0.0,
+            peak_abs: 0.0,
+            sample_rate,
+            sample_count: 0,
+        }
+    }
+
+    /// Audio thread: no allocation, no lock -- same constraint as
+    /// `LeqIntegrator::push`. Every piece of state this needs already lives
+    /// in struct fields.
+    pub fn push(&mut self, samples: &[f32]) {
+        self.leq.push(samples);
+        self.laeq.push(samples);
+        self.lceq.push(samples);
+
+        for &x in samples {
+            let weighted = self.a_filter.process(x);
+            self.peak_abs = self.peak_abs.max(weighted.abs());
+
+            let mean_square = self.fast_detector.push(weighted);
+            self.fast_max_mean_square = self.fast_max_mean_square.max(mean_square);
+        }
+
+        self.sample_count += samples.len() as u64;
+    }
+
+    pub fn metrics(&self) -> LeqMetrics {
+        LeqMetrics {
+            leq_db: self.leq.leq_db(),
+            laeq_db: self.laeq.leq_db(),
+            lceq_db: self.lceq.leq_db(),
+            lafmax_db: mean_square_to_db(self.fast_max_mean_square),
+            lapeak_db: amplitude_to_db(self.peak_abs),
+            elapsed_seconds: self.sample_count as f64 / self.sample_rate as f64,
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.leq.reset();
+        self.laeq.reset();
+        self.lceq.reset();
+        self.a_filter.reset_state();
+        self.fast_detector.reset();
+        self.fast_max_mean_square = 0.0;
+        self.peak_abs = 0.0;
+        self.sample_count = 0;
     }
 }
 
@@ -480,5 +642,82 @@ mod tests {
                 "C-weighting at {freq} Hz @ 44.1 kHz: expected {expected:.1} dB (+/-{tolerance} dB), got {measured:.2} dB"
             );
         }
+    }
+
+    /// Peak is instantaneous and max is time-weighted, so a single-sample
+    /// transient shows up in peak and is smoothed away in Fast max.
+    #[test]
+    fn peak_catches_a_transient_that_fast_max_smooths() {
+        let mut meter = LeqMeter::new(FS);
+        let mut block = vec![0.0f32; FS as usize];
+        block[100] = 1.0; // one full-scale sample
+
+        meter.push(&block);
+        let m = meter.metrics();
+        assert!(
+            m.lapeak_db > m.lafmax_db + 10.0,
+            "peak {:.2} should tower over Fast max {:.2} for a single sample",
+            m.lapeak_db,
+            m.lafmax_db
+        );
+    }
+
+    /// Fast max never falls below LEQ for a steady signal, and for a steady
+    /// signal the two converge.
+    #[test]
+    fn steady_signal_converges_max_onto_leq() {
+        let mut meter = LeqMeter::new(FS);
+        meter.push(&sine(1000.0, 0.5, 5.0));
+        let m = meter.metrics();
+        assert!(
+            (m.lafmax_db - m.laeq_db).abs() < 1.0,
+            "steady sine: Fast max {:.2} vs LAeq {:.2}",
+            m.lafmax_db,
+            m.laeq_db
+        );
+    }
+
+    /// A and C weightings differ on a low-frequency signal, and C is the
+    /// higher of the two: C is nearly flat at 100 Hz where A cuts hard.
+    #[test]
+    fn c_weighted_exceeds_a_weighted_at_low_frequency() {
+        let mut meter = LeqMeter::new(FS);
+        meter.push(&sine(63.0, 0.5, 2.0));
+        let m = meter.metrics();
+        assert!(
+            m.lceq_db > m.laeq_db + 10.0,
+            "at 63 Hz LCeq {:.2} should exceed LAeq {:.2} by well over 10 dB",
+            m.lceq_db,
+            m.laeq_db
+        );
+    }
+
+    /// Elapsed time tracks the samples pushed, which is what the dose
+    /// calculation in Task 4 divides by.
+    #[test]
+    fn elapsed_time_tracks_the_samples_pushed() {
+        let mut meter = LeqMeter::new(FS);
+        meter.push(&sine(1000.0, 0.5, 2.5));
+        assert!((meter.metrics().elapsed_seconds - 2.5).abs() < 1e-3);
+    }
+
+    /// Reset clears everything, so starting a new measurement does not inherit
+    /// the previous one's peak.
+    #[test]
+    fn reset_clears_the_peak() {
+        let mut meter = LeqMeter::new(FS);
+        let mut loud = vec![0.0f32; 1000];
+        loud[0] = 1.0;
+        meter.push(&loud);
+        let before = meter.metrics().lapeak_db;
+
+        meter.reset();
+        meter.push(&sine(1000.0, 0.01, 0.5));
+        let after = meter.metrics().lapeak_db;
+
+        assert!(
+            after < before - 20.0,
+            "peak survived reset: {before:.2} -> {after:.2}"
+        );
     }
 }
