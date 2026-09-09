@@ -23,10 +23,11 @@ import { createPollLoop } from "./lib/poll-loop";
 import { audioApi } from "./services/audio-api";
 import { useAudioStore } from "./stores/audio-store";
 import type {
-	CurveFamily,
 	DoseResult,
 	LicenseState,
 	NoiseLimit,
+	RcResult,
+	RoomCriteriaFamily,
 	RoomCriteriaResult,
 	Routing,
 } from "./types/audio";
@@ -106,8 +107,9 @@ export const App = () => {
 	const [leqDose, setLeqDose] = useState<DoseResult | null>(null);
 	const [leqLogging, setLeqLogging] = useState(false);
 	const [leqLoggingPath, setLeqLoggingPath] = useState<string | null>(null);
-	const [roomCriteriaFamily, setRoomCriteriaFamily] = useState<CurveFamily>("nc");
+	const [roomCriteriaFamily, setRoomCriteriaFamily] = useState<RoomCriteriaFamily>("nc");
 	const [roomCriteriaResult, setRoomCriteriaResult] = useState<RoomCriteriaResult | null>(null);
+	const [rcResult, setRcResult] = useState<RcResult | null>(null);
 
 	// Animation frame ref for spectrum polling
 
@@ -323,8 +325,13 @@ export const App = () => {
 
 		return createPollLoop(
 			async () => {
-				const result = await audioApi.getRoomCriteria(roomCriteriaFamily);
-				setRoomCriteriaResult(result);
+				if (roomCriteriaFamily === "rc") {
+					const result = await audioApi.getRcRating();
+					setRcResult(result);
+				} else {
+					const result = await audioApi.getRoomCriteria(roomCriteriaFamily);
+					setRoomCriteriaResult(result);
+				}
 			},
 			(callback) => window.setTimeout(callback, 300),
 			(handle) => window.clearTimeout(handle),
@@ -413,7 +420,14 @@ export const App = () => {
 				onStopLogging={handleStopLeqLogging}
 			/>
 		),
-		room: <RoomCriteriaPanel result={roomCriteriaResult} onFamilyChange={setRoomCriteriaFamily} />,
+		room: (
+			<RoomCriteriaPanel
+				family={roomCriteriaFamily}
+				result={roomCriteriaResult}
+				rcResult={rcResult}
+				onFamilyChange={setRoomCriteriaFamily}
+			/>
+		),
 	};
 
 	return (

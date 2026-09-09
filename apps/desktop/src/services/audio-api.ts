@@ -10,6 +10,7 @@ import type {
 	LeqMetrics,
 	LicenseState,
 	NoiseLimit,
+	RcResult,
 	ReferenceCurve,
 	ReferenceCurveInfo,
 	ReferenceCurveType,
@@ -312,6 +313,9 @@ export const audioApi = {
 	 */
 	getRoomCriteria: (family: CurveFamily): Promise<RoomCriteriaResult> =>
 		invoke<RoomCriteriaResult>("get_room_criteria", { family }),
+
+	/** Rate the current calibrated spectrum on RC Mark II. */
+	getRcRating: (): Promise<RcResult> => invoke<RcResult>("get_rc_rating"),
 
 	// ========================================================================
 	// Licensing

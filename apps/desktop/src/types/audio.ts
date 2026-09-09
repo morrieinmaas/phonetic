@@ -219,8 +219,15 @@ export interface DoseResult {
 	peak_exceeded: boolean;
 }
 
-/** Room criteria curve families. */
+/** Room criteria curve families -- the wire format for `get_room_criteria`. */
 export type CurveFamily = "nc" | "nr";
+
+/**
+ * Every family selectable in the Room Criteria panel: the two tangency curve
+ * families plus RC Mark II, which is not a `CurveFamily` on the Rust side
+ * (see `RcResult`) but shares the same selector UI.
+ */
+export type RoomCriteriaFamily = CurveFamily | "rc";
 
 /** A room criteria rating, matching the Rust `RoomCriteriaResult` wire format exactly. */
 export interface RoomCriteriaResult {
@@ -229,4 +236,25 @@ export interface RoomCriteriaResult {
 	exceeded_band_hz: number;
 	band_levels_db: number[];
 	curve_db: number[];
+}
+
+/**
+ * RC Mark II spectral quality descriptor, matching the Rust `RcQuality` wire
+ * format exactly. Serde's `rename_all = "snake_case"` turns `LowFrequency`
+ * into `low_frequency` and so on.
+ */
+export type RcQuality = "neutral" | "low_frequency" | "mid_frequency" | "high_frequency";
+
+/**
+ * An RC Mark II rating, matching the Rust `RcResult` wire format exactly. Not
+ * a tangency rating like `RoomCriteriaResult` -- `level` is the 500/1000/2000 Hz
+ * average and `quality` is a separate spectral-shape descriptor.
+ */
+export interface RcResult {
+	level: number;
+	quality: RcQuality;
+	band_levels_db: number[];
+	bins_per_band: number[];
+	reference_db: number[];
+	under_resolved: boolean;
 }

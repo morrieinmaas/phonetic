@@ -81,6 +81,7 @@ pub fn run() {
             commands::get_calibration_info,
             // Room criteria commands
             commands::get_room_criteria,
+            commands::get_rc_rating,
             // Export commands
             commands::export_transfer_function,
             commands::export_impulse_response,

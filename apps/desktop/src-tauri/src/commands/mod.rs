@@ -13,10 +13,11 @@ use crate::dsp::{
     bin_frequencies, diagnose, dose, export_impulse_response_csv, export_impulse_response_json,
     export_impulse_response_txt, export_transfer_function_csv, export_transfer_function_json,
     export_transfer_function_txt, generate_standard_frequencies, octave_band_levels,
-    predict_with_eq, rate, write_to_file, BiquadFilter, CurveFamily, DelayFinder, DelayResult,
-    Diagnosis, DoseResult, ExportFormat, ImpulseResponseData, ImpulseResponseProcessor, LeqLogger,
-    LeqMetrics, LimitSet, MeasurementMetadata, MicrophoneCalibration, NoiseLimit, ReferenceCurve,
-    ReferenceCurveType, RoomCriteriaResult, SmoothingFraction, SplCalculator, TransferFunctionData,
+    predict_with_eq, rate, rate_rc, write_to_file, BiquadFilter, CurveFamily, DelayFinder,
+    DelayResult, Diagnosis, DoseResult, ExportFormat, ImpulseResponseData,
+    ImpulseResponseProcessor, LeqLogger, LeqMetrics, LimitSet, MeasurementMetadata,
+    MicrophoneCalibration, NoiseLimit, RcResult, ReferenceCurve, ReferenceCurveType,
+    RoomCriteriaResult, SmoothingFraction, SplCalculator, TransferFunctionData,
 };
 use parking_lot::Mutex;
 
@@ -505,6 +506,33 @@ pub async fn get_room_criteria(
     family: CurveFamily,
 ) -> Result<RoomCriteriaResult, String> {
     get_room_criteria_inner(&engine, &dsp, family)
+}
+
+/// Rate the current calibrated spectrum on RC Mark II.
+///
+/// Testable without a `State`, as `get_room_criteria_inner` above.
+fn get_rc_rating_inner(engine: &AudioEngine, dsp: &DspState) -> Result<RcResult, String> {
+    let spectrum_dbfs = engine.get_spectrum_data();
+    // Same axis-derivation rule as get_room_criteria_inner: from the spectrum's
+    // own bin count, not FFT_SIZE -- see that function's comment.
+    let frequencies = bin_frequencies(spectrum_dbfs.len(), engine.sample_rate() as f32);
+
+    // Calibrate under the lock, then drop the guard before rating: no lock
+    // held across expensive work.
+    let spl_db = dsp
+        .spl_calculator
+        .lock()
+        .calibrate_spectrum(&spectrum_dbfs, &frequencies);
+
+    Ok(rate_rc(&spl_db, &frequencies))
+}
+
+#[tauri::command]
+pub async fn get_rc_rating(
+    engine: State<'_, AudioEngine>,
+    dsp: State<'_, DspState>,
+) -> Result<RcResult, String> {
+    get_rc_rating_inner(&engine, &dsp)
 }
 
 // ============================================================================
@@ -1013,6 +1041,14 @@ mod tests {
         let engine = AudioEngine::new();
         let dsp = DspState::new();
         let result = get_room_criteria_inner(&engine, &dsp, CurveFamily::Nc);
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[test]
+    fn rc_rating_command_returns_a_rating() {
+        let engine = AudioEngine::new();
+        let dsp = DspState::new();
+        let result = get_rc_rating_inner(&engine, &dsp);
         assert!(result.is_ok(), "{result:?}");
     }
 }
