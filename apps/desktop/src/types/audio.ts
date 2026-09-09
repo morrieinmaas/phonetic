@@ -257,4 +257,7 @@ export interface RcResult {
 	bins_per_band: number[];
 	reference_db: number[];
 	under_resolved: boolean;
+	/** Minimum FFT bins a band needs to be trustworthy. Sent with the rating so
+	 *  the display cannot drift from the threshold the backend actually used. */
+	min_bins_per_band: number;
 }

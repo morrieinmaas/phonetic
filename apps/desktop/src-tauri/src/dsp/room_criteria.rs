@@ -404,6 +404,11 @@ pub struct RcResult {
     pub bins_per_band: Vec<usize>,
     pub reference_db: Vec<f32>,
     pub under_resolved: bool,
+    /// The minimum bin count a band needs to be trustworthy, carried over the
+    /// wire so the display marks the same bands thin that `under_resolved` was
+    /// computed from. Duplicating this constant in TypeScript would let the two
+    /// sides disagree silently the moment either changed.
+    pub min_bins_per_band: usize,
 }
 
 /// Rate a spectrum on RC Mark II: a numeric level (the 500/1000/2000 Hz
@@ -462,6 +467,7 @@ pub fn rate_rc(spl_db: &[f32], frequencies: &[f32]) -> RcResult {
         bins_per_band,
         reference_db,
         under_resolved,
+        min_bins_per_band: MIN_BINS_PER_RC_BAND,
     }
 }
 

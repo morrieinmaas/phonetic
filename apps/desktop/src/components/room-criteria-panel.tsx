@@ -5,13 +5,6 @@ const OCTAVE_BAND_HZ = [63, 125, 250, 500, 1000, 2000, 4000, 8000] as const;
 /** RC Mark II's own nine octave bands — wider and lower than the NC/NR set above. */
 const RC_OCTAVE_BAND_HZ = [16, 31.5, 63, 125, 250, 500, 1000, 2000, 4000] as const;
 
-/**
- * Minimum FFT bins an RC band needs before its level is trustworthy. Mirrors
- * `MIN_BINS_PER_RC_BAND` in the Rust `dsp::room_criteria` module — used here
- * only to highlight which bands are thin, not to recompute `under_resolved`.
- */
-const MIN_BINS_PER_RC_BAND = 2;
-
 const FAMILY_OPTIONS: { value: RoomCriteriaFamily; label: string }[] = [
 	{ value: "nc", label: "NC — Noise Criteria" },
 	{ value: "nr", label: "NR — Noise Rating" },
@@ -100,12 +93,15 @@ interface RcBandCellProps {
 	levelDb: number | undefined;
 	referenceDb: number | undefined;
 	bins: number | undefined;
+	/** Comes from the backend with the rating, so the panel marks the same
+	 *  bands thin that `under_resolved` was computed from. */
+	minBins: number;
 }
 
 /** One RC band: measured level over the reference line, plus its FFT bin count — the number
  * that tells the operator whether this band's reading means anything. */
-const RcBandCell = ({ hz, levelDb, referenceDb, bins }: RcBandCellProps) => {
-	const thin = bins !== undefined && bins < MIN_BINS_PER_RC_BAND;
+const RcBandCell = ({ hz, levelDb, referenceDb, bins, minBins }: RcBandCellProps) => {
+	const thin = bins !== undefined && bins < minBins;
 
 	return (
 		<div
@@ -165,6 +161,7 @@ const RcContent = ({ result }: { result: RcResult }) => (
 					levelDb={result.band_levels_db[i]}
 					referenceDb={result.reference_db[i]}
 					bins={result.bins_per_band[i]}
+					minBins={result.min_bins_per_band}
 				/>
 			))}
 		</div>

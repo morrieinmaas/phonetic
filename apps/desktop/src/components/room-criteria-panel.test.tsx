@@ -17,6 +17,7 @@ const rcResult = {
 	bins_per_band: [0, 1, 5, 5, 5, 5, 5, 5, 5],
 	reference_db: [50, 46, 42, 40, 38, 36, 35, 30, 25],
 	under_resolved: true,
+	min_bins_per_band: 2,
 };
 
 describe("RoomCriteriaPanel", () => {
