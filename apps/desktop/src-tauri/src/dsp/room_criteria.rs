@@ -1,20 +1,31 @@
-//! Room criteria ratings: NC (ANSI S12.2) and NR (ISO 1996).
+//! Room criteria ratings: NC (ANSI S12.2), NR (ISO 1996), and RC (ASHRAE
+//! Room Criterion, Mark II).
 //!
-//! Both families work the same way — compare measured octave-band SPL against
-//! a family of curves and report the lowest curve no band exceeds (the
-//! "tangency" method) — so there is one evaluation engine here and two
-//! tables.
+//! NC and NR are tangency ratings — compare measured octave-band SPL against
+//! a family of curves and report the lowest curve no band exceeds — so
+//! there is one evaluation engine (`rate`) here and two tables.
 //!
-//! RC (ASHRAE Room Criterion) is deliberately not implemented alongside them:
-//! an RC rating is the arithmetic mean of the 500/1000/2000 Hz bands plus a
-//! separate spectral-quality letter (N/LF/MF/HF). It is not a tangency
-//! rating and does not fit the `rate()` API below — forcing it through would
-//! silently produce a wrong acoustic rating.
+//! RC Mark II is not a tangency rating and does not fit that engine: it
+//! reports the arithmetic mean of the 500/1000/2000 Hz bands as a numeric
+//! level, plus a separate spectral-quality letter (N/LF/MF/HF) describing how
+//! the measured spectrum deviates from a −5 dB/octave reference line through
+//! that level at 1000 Hz. `rate_rc` is its own function — see the citation
+//! comment above it for the classification procedure and its sources.
 
 use serde::{Deserialize, Serialize};
+use std::ops::Range;
 
 /// Octave band centres used by NC and NR.
 pub const OCTAVE_CENTRES_HZ: [f32; 8] = [63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0];
+
+/// Octave band centres used by RC — 16 Hz to 4 kHz, the range RC Mark II is
+/// defined over. This is deliberately not merged into `OCTAVE_CENTRES_HZ`:
+/// NC and NR are defined on their own eight bands and their curve tables are
+/// keyed to that array, so widening it would ripple through working, tested
+/// code for no benefit.
+pub const RC_OCTAVE_CENTRES_HZ: [f32; 9] = [
+    16.0, 31.5, 63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0,
+];
 
 /// Level reported for a band containing no FFT bins.
 const EMPTY_BAND_DB: f32 = -200.0;
@@ -24,28 +35,43 @@ fn band_edges(centre_hz: f32) -> (f32, f32) {
     (centre_hz / half, centre_hz * half)
 }
 
-/// Sum narrowband SPL into octave bands.
+/// Power-sum narrowband SPL into octave bands centred on `centres`, and
+/// report how many FFT bins backed each band.
 ///
-/// This is a power sum over the bins in each band, not an average: ten bins at
-/// 50 dB make a 60 dB band.
+/// This is a power sum over the bins in each band, not an average: ten bins
+/// at 50 dB make a 60 dB band. A band with zero bins reports `EMPTY_BAND_DB`
+/// rather than -inf or NaN, so rating logic downstream never has to
+/// special-case it — but the bin count is returned alongside so a caller can
+/// still tell a real silence from an unresolved band.
+fn band_levels(spl_db: &[f32], frequencies: &[f32], centres: &[f32]) -> (Vec<f32>, Vec<usize>) {
+    centres
+        .iter()
+        .map(|&centre| {
+            let (lo, hi) = band_edges(centre);
+            let bin_powers: Vec<f64> = frequencies
+                .iter()
+                .zip(spl_db.iter())
+                .filter(|(&f, _)| f >= lo && f < hi)
+                .map(|(_, &db)| 10f64.powf(db as f64 / 10.0))
+                .collect();
+
+            let level = if bin_powers.is_empty() {
+                EMPTY_BAND_DB
+            } else {
+                (10.0 * bin_powers.iter().sum::<f64>().log10()) as f32
+            };
+
+            (level, bin_powers.len())
+        })
+        .unzip()
+}
+
+/// Sum narrowband SPL into the eight NC/NR octave bands.
+///
+/// Thin wrapper over `band_levels` — see that function for the summing rule.
 pub fn octave_band_levels(spl_db: &[f32], frequencies: &[f32]) -> [f32; 8] {
-    let mut out = [EMPTY_BAND_DB; 8];
-
-    for (band, &centre) in OCTAVE_CENTRES_HZ.iter().enumerate() {
-        let (lo, hi) = band_edges(centre);
-        let power: f64 = frequencies
-            .iter()
-            .zip(spl_db.iter())
-            .filter(|(&f, _)| f >= lo && f < hi)
-            .map(|(_, &db)| 10f64.powf(db as f64 / 10.0))
-            .sum();
-
-        if power > 0.0 {
-            out[band] = (10.0 * power.log10()) as f32;
-        }
-    }
-
-    out
+    let (levels, _bins_per_band) = band_levels(spl_db, frequencies, &OCTAVE_CENTRES_HZ);
+    levels.try_into().expect("OCTAVE_CENTRES_HZ has 8 elements")
 }
 
 /// A room-criteria curve family. RC is not a variant here — see the module
@@ -275,6 +301,170 @@ pub fn rate(bands_db: &[f32; 8], family: CurveFamily) -> RoomCriteriaResult {
     }
 }
 
+// RC Mark II (ASHRAE Room Criterion, refined by Blazier, 1997) — octave
+// bands 16 Hz to 4 kHz, grouped into three spectral regions.
+//
+// Citation 1: ASHRAE Handbook 2023, HVAC Applications, Chapter 49, "Noise
+//   and Vibration Control" — https://handbook.ashrae.org/Handbooks/A23/IP/A23_Ch49/a23_ch49_ip.aspx
+//   "The number is the arithmetic average rounded to the nearest integer of
+//   sound pressure levels in the 500, 1000, and 2000 Hz octave bands...
+//   The RC reference curve is chosen to be that which has the same value at
+//   1000 Hz as the calculated average value... Calculate the energy-averaged
+//   spectral deviations from the RC reference curve in each of three
+//   frequency groups: low (LF; 16 to 63 Hz), medium (MF; 125 to 500 Hz), and
+//   high (HF; 1000 to 4000 Hz)... QAI is the range in dB between the highest
+//   and lowest values of the spectral deviation factors... If QAI <= 5 dB,
+//   the spectrum is assigned a neutral (N) rating. If QAI exceeds 5 dB, the
+//   sound quality descriptor of the RC rating is the letter designation of
+//   the frequency region of the deviation factor having the highest
+//   positive value."
+// Citation 2: Arup, "RC-II Rating" (Strutt help documentation) —
+//   https://strutt.arup.com/help/Ratings/RCII.htm
+//   Gives the same three regions (LF: 16/31.5/63 Hz, MF: 125/250/500 Hz, HF:
+//   1000/2000/4000 Hz) and the same per-region formula, e.g.
+//   LF = 10*log10((10^(0.1*delta16) + 10^(0.1*delta31.5) + 10^(0.1*delta63))/3),
+//   with QAI defined as "the range from the highest to the lowest of HF, MF
+//   and LF" and the same QAI < 5 -> Neutral threshold.
+//
+// The two sources agree exactly on the region boundaries, the energy-average
+// formula, and the 5 dB threshold — no disagreement to report here (unlike
+// the NC/NR tables above).
+//
+// One judgment call the sources leave open: what "highest positive value"
+// means when none of the three factors is actually positive. This
+// implementation assigns the descriptor to whichever factor is largest
+// regardless of sign, which is the only reading that always produces an
+// answer and agrees with the sources whenever at least one factor is
+// positive (the case both citations' worked examples cover).
+
+/// Indices into `RC_OCTAVE_CENTRES_HZ` for each RC Mark II spectral region.
+const RC_LF_BANDS: Range<usize> = 0..3; // 16, 31.5, 63 Hz
+const RC_MF_BANDS: Range<usize> = 3..6; // 125, 250, 500 Hz
+const RC_HF_BANDS: Range<usize> = 6..9; // 1000, 2000, 4000 Hz
+
+/// Indices of the 500/1000/2000 Hz bands the RC level is averaged from.
+const RC_LEVEL_BANDS: Range<usize> = 5..8;
+
+/// QAI at or below this is Neutral; above it, the spectrum takes the letter
+/// of whichever region deviates most.
+const RC_QAI_NEUTRAL_THRESHOLD_DB: f32 = 5.0;
+
+/// Minimum FFT bins a band needs before its level counts as resolved.
+///
+/// A single bin is not a sum — it is that one bin's raw narrowband value
+/// standing in for an entire octave, as likely to land on a spectral null or
+/// a stray tone as to represent the band's true energy. Two is the smallest
+/// count at which `band_levels`'s power sum is doing any averaging at all,
+/// so that is the floor used here. (At the default 2048-point FFT and 48 kHz
+/// the 16 Hz band has zero bins and the 31.5 Hz band has exactly one — both
+/// below this floor, which is exactly the case this flag exists to catch.)
+const MIN_BINS_PER_RC_BAND: usize = 2;
+
+/// RC reference line: −5 dB/octave through `level_at_1k_db` at 1000 Hz.
+fn rc_reference_db(level_at_1k_db: f32, centre_hz: f32) -> f32 {
+    const SLOPE_DB_PER_OCTAVE: f32 = -5.0;
+    let octaves_from_1k = (centre_hz / 1000.0).log2();
+    level_at_1k_db + SLOPE_DB_PER_OCTAVE * octaves_from_1k
+}
+
+/// Energy-averaged spectral deviation factor for one RC Mark II region: the
+/// power average, in dB, of (measured − reference) across the region's
+/// bands.
+fn spectral_deviation_factor(
+    band_levels_db: &[f32],
+    reference_db: &[f32],
+    region: Range<usize>,
+) -> f32 {
+    let count = region.len() as f64;
+    let power_sum: f64 = region
+        .map(|i| 10f64.powf((band_levels_db[i] - reference_db[i]) as f64 / 10.0))
+        .sum();
+    (10.0 * (power_sum / count).log10()) as f32
+}
+
+/// RC Mark II spectral quality descriptor — how the room sounds, not how
+/// loud it is. See the citation comment above `rate_rc` for the
+/// classification procedure and its sources.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RcQuality {
+    Neutral,
+    LowFrequency,
+    MidFrequency,
+    HighFrequency,
+}
+
+/// Result of an RC Mark II rating: a numeric level plus a spectral quality
+/// letter, and how well-resolved the measurement backing it was.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RcResult {
+    pub level: f32,
+    pub quality: RcQuality,
+    pub band_levels_db: Vec<f32>,
+    pub bins_per_band: Vec<usize>,
+    pub reference_db: Vec<f32>,
+    pub under_resolved: bool,
+}
+
+/// Rate a spectrum on RC Mark II: a numeric level (the 500/1000/2000 Hz
+/// average) plus a spectral quality letter. Not a tangency rating — see the
+/// module doc comment and the citation comment above for why this has its
+/// own function instead of going through `rate()`.
+pub fn rate_rc(spl_db: &[f32], frequencies: &[f32]) -> RcResult {
+    let (band_levels_db, bins_per_band) = band_levels(spl_db, frequencies, &RC_OCTAVE_CENTRES_HZ);
+
+    let level = {
+        let sum: f32 = RC_LEVEL_BANDS.map(|i| band_levels_db[i]).sum();
+        (sum / RC_LEVEL_BANDS.len() as f32).round()
+    };
+
+    let reference_db: Vec<f32> = RC_OCTAVE_CENTRES_HZ
+        .iter()
+        .map(|&f| rc_reference_db(level, f))
+        .collect();
+
+    let lf = spectral_deviation_factor(&band_levels_db, &reference_db, RC_LF_BANDS);
+    let mf = spectral_deviation_factor(&band_levels_db, &reference_db, RC_MF_BANDS);
+    let hf = spectral_deviation_factor(&band_levels_db, &reference_db, RC_HF_BANDS);
+
+    let factors = [lf, mf, hf];
+    let qai = factors.iter().copied().fold(f32::NEG_INFINITY, f32::max)
+        - factors.iter().copied().fold(f32::INFINITY, f32::min);
+
+    let quality = if qai <= RC_QAI_NEUTRAL_THRESHOLD_DB {
+        RcQuality::Neutral
+    } else {
+        [
+            (RcQuality::LowFrequency, lf),
+            (RcQuality::MidFrequency, mf),
+            (RcQuality::HighFrequency, hf),
+        ]
+        .into_iter()
+        .fold(
+            (RcQuality::Neutral, f32::NEG_INFINITY),
+            |best, candidate| {
+                if candidate.1 > best.1 {
+                    candidate
+                } else {
+                    best
+                }
+            },
+        )
+        .0
+    };
+
+    let under_resolved = bins_per_band.iter().any(|&n| n < MIN_BINS_PER_RC_BAND);
+
+    RcResult {
+        level,
+        quality,
+        band_levels_db,
+        bins_per_band,
+        reference_db,
+        under_resolved,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -446,5 +636,163 @@ mod tests {
             );
             previous = rating;
         }
+    }
+
+    // -- RC Mark II -----------------------------------------------------
+
+    /// A synthetic spectrum with exactly one narrowband bin at each RC
+    /// octave centre, at the given per-band level. There is no other energy
+    /// on the frequency axis at all, so `rate_rc`'s power sum for each band
+    /// reduces to that single value.
+    fn rc_single_bin_spectrum(levels_by_band: [f32; 9]) -> (Vec<f32>, Vec<f32>) {
+        (levels_by_band.to_vec(), RC_OCTAVE_CENTRES_HZ.to_vec())
+    }
+
+    /// Band levels that sit exactly on the RC-35 reference line.
+    fn on_curve_rc35_bands() -> [f32; 9] {
+        let mut bands = [0.0f32; 9];
+        for (i, &f) in RC_OCTAVE_CENTRES_HZ.iter().enumerate() {
+            bands[i] = rc_reference_db(35.0, f);
+        }
+        bands
+    }
+
+    /// A spectrum sitting exactly on an RC-35 reference line rates level
+    /// ≈35 and quality Neutral.
+    #[test]
+    fn on_curve_spectrum_rates_neutral_at_its_own_level() {
+        let (spl, frequencies) = rc_single_bin_spectrum(on_curve_rc35_bands());
+
+        let result = rate_rc(&spl, &frequencies);
+
+        assert!(
+            (result.level - 35.0).abs() < 0.5,
+            "expected level ~35, got {}",
+            result.level
+        );
+        assert_eq!(
+            result.quality,
+            RcQuality::Neutral,
+            "on-curve spectrum should rate Neutral, got {:?}",
+            result.quality
+        );
+    }
+
+    /// Low-frequency energy well above the reference yields LF, not MF or
+    /// HF — proves the regions are not aliased.
+    #[test]
+    fn low_frequency_excess_rates_low_frequency_only() {
+        let mut bands = on_curve_rc35_bands();
+        bands[0] += 30.0; // 16 Hz
+        bands[1] += 30.0; // 31.5 Hz
+        bands[2] += 30.0; // 63 Hz
+        let (spl, frequencies) = rc_single_bin_spectrum(bands);
+
+        let result = rate_rc(&spl, &frequencies);
+
+        assert_eq!(
+            result.quality,
+            RcQuality::LowFrequency,
+            "a 30 dB LF-region excess should rate LowFrequency, got {:?}",
+            result.quality
+        );
+    }
+
+    /// Mid-frequency energy well above the reference yields MF, not LF or
+    /// HF. The 500 Hz band is left untouched since it also feeds the RC
+    /// level.
+    #[test]
+    fn mid_frequency_excess_rates_mid_frequency_only() {
+        let mut bands = on_curve_rc35_bands();
+        bands[3] += 30.0; // 125 Hz
+        bands[4] += 30.0; // 250 Hz
+        let (spl, frequencies) = rc_single_bin_spectrum(bands);
+
+        let result = rate_rc(&spl, &frequencies);
+
+        assert_eq!(
+            result.quality,
+            RcQuality::MidFrequency,
+            "a 30 dB MF-region excess should rate MidFrequency, got {:?}",
+            result.quality
+        );
+    }
+
+    /// High-frequency energy well above the reference yields HF, not LF or
+    /// MF. The 1000/2000 Hz bands are left untouched since they also feed
+    /// the RC level.
+    #[test]
+    fn high_frequency_excess_rates_high_frequency_only() {
+        let mut bands = on_curve_rc35_bands();
+        bands[8] += 30.0; // 4000 Hz
+        let (spl, frequencies) = rc_single_bin_spectrum(bands);
+
+        let result = rate_rc(&spl, &frequencies);
+
+        assert_eq!(
+            result.quality,
+            RcQuality::HighFrequency,
+            "a 30 dB HF-region excess should rate HighFrequency, got {:?}",
+            result.quality
+        );
+    }
+
+    /// The level depends only on the 500/1000/2000 Hz bands: changing the
+    /// 63 Hz band alone must not move it, even though it moves the quality
+    /// letter.
+    #[test]
+    fn level_ignores_a_63_hz_change_but_the_quality_letter_may_move() {
+        let base = on_curve_rc35_bands();
+        let (spl, frequencies) = rc_single_bin_spectrum(base);
+        let base_result = rate_rc(&spl, &frequencies);
+
+        let mut perturbed = base;
+        perturbed[2] += 25.0; // 63 Hz only
+        let (spl, frequencies) = rc_single_bin_spectrum(perturbed);
+        let perturbed_result = rate_rc(&spl, &frequencies);
+
+        assert_eq!(
+            base_result.level, perturbed_result.level,
+            "moving only the 63 Hz band changed the level from {} to {}",
+            base_result.level, perturbed_result.level
+        );
+        assert_eq!(
+            perturbed_result.quality,
+            RcQuality::LowFrequency,
+            "a 25 dB excess at 63 Hz alone should still move the quality letter to LF, got {:?}",
+            perturbed_result.quality
+        );
+    }
+
+    /// A frequency axis too coarse to populate the low bands — the default
+    /// 2048-point FFT at 48 kHz, bin spacing 48000/2048 = 23.4375 Hz — sets
+    /// `under_resolved` and reports the true (zero or one) bin counts for
+    /// the 16 Hz and 31.5 Hz bands.
+    #[test]
+    fn coarse_fft_axis_flags_under_resolved_and_reports_true_bin_counts() {
+        let fft_size = 2048usize;
+        let sample_rate = 48_000.0f32;
+        let bin_count = fft_size / 2 + 1;
+        let frequencies: Vec<f32> = (0..bin_count)
+            .map(|i| i as f32 * sample_rate / fft_size as f32)
+            .collect();
+        let spl = vec![40.0f32; frequencies.len()];
+
+        let result = rate_rc(&spl, &frequencies);
+
+        assert_eq!(
+            result.bins_per_band[0], 0,
+            "16 Hz band should contain zero bin centres at this resolution, got {}",
+            result.bins_per_band[0]
+        );
+        assert_eq!(
+            result.bins_per_band[1], 1,
+            "31.5 Hz band should contain exactly one bin centre at this resolution, got {}",
+            result.bins_per_band[1]
+        );
+        assert!(
+            result.under_resolved,
+            "a zero-bin 16 Hz band should set under_resolved"
+        );
     }
 }
