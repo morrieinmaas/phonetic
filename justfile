@@ -278,6 +278,7 @@ status:
 
 # Create a new release tag
 tag version:
+    @grep -q "\"version\": \"{{version}}\"" {{tauri}}/tauri.conf.json || { echo "tauri.conf.json is not at {{version}}; bump Cargo.toml, tauri.conf.json and apps/desktop/package.json first"; exit 1; }
     git tag -a v{{version}} -m "Release v{{version}}"
     git push origin v{{version}}
 
