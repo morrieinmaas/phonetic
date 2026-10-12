@@ -1,173 +1,154 @@
 # Phonetic
 
-Modern, Apple Silicon-native audio measurement system. A rival to [AFMG SysTune](https://www.afmg.eu/en/afmg-systune#features) with real-time signal processing and a modern UI.
+Audio measurement for live sound and room acoustics on macOS and Linux. Dual-FFT transfer
+function, impulse response, SPL and noise-dose metering, room criteria, a 32-channel matrix,
+and a scriptable CLI, with a DSP core that is tested against closed-form answers rather than
+against itself. An open alternative to AFMG SysTune and Smaart.
 
-## Features
+## Install
 
-### Core Measurements
+Grab the file for your machine from the
+[latest release](https://github.com/morrieinmaas/phonetic/releases/latest).
 
-- Real-time FFT / spectrum analysis with peak hold
-- Transfer function (input vs output comparison) with auto-zoom
-- Impulse response measurement with RT60 estimation
-- Phase response and group delay
-- SPL metering (dBFS, dB SPL with calibration)
-- Delay finder (cross-correlation based)
-- Coherence display
+| Platform | Download |
+|---|---|
+| macOS, Apple Silicon (M1 and later) | `Phonetic_<version>_aarch64.dmg` |
+| macOS, Intel | `Phonetic_<version>_x64.dmg` |
+| Linux x86_64 | `Phonetic_<version>_amd64.deb`, `Phonetic-<version>-1.x86_64.rpm` or `Phonetic_<version>_amd64.AppImage` |
+| Linux arm64 | `Phonetic_<version>_arm64.deb`, `Phonetic-<version>-1.aarch64.rpm` or `Phonetic_<version>_aarch64.AppImage` |
+| Headless CLI, any of the above | `phonetic-cli-<platform>` |
 
-### Signal Generator
+### macOS
 
-- Sine wave (20Hz - 20kHz)
-- Pink noise
-- White noise
-- Logarithmic sweep
+Phonetic is not signed with an Apple Developer ID and not notarised, so macOS blocks the first
+launch. Every release is built by the public GitHub Actions workflow from the tagged source, so
+you can audit exactly what you are approving.
 
-### Calibration
+1. Open the `.dmg` and drag Phonetic to Applications.
+2. Double-click Phonetic. macOS says it could not verify the app. Click **Done**.
+3. Open **System Settings → Privacy & Security**, scroll to **Security**, click **Open Anyway**
+   next to the Phonetic message, and confirm with your password or Touch ID.
+4. Launch Phonetic again and allow microphone access. The approval is remembered.
 
-- Microphone calibration file import (.cal format)
-- A-weighting and C-weighting filters
-- Sensitivity and preamp gain compensation
-- Reference curves overlay (ISO 226, X-curve, house curve, weighting curves)
-
-### Room & Noise Analysis
-
-Reached from the **View** tabs above the secondary display.
-
-- **Room Criteria** — NC (ANSI S12.2) and NR (ISO 1996) background-noise ratings
-  by the tangency method: the lowest curve no octave band exceeds, plus the band
-  that determined it. Needs calibrated SPL, so set your microphone calibration
-  first. RC is deliberately not implemented — it is an average of three bands
-  plus a spectral-quality letter, not a tangency rating, and forcing it through
-  the same engine would misreport it.
-- **Channel Matrix** — up to 32 input channels with free assignment. Any input
-  can be a measurement or a reference, multiple measurement pairs run at once,
-  and each pair carries its own delay and calibration offset. A pair may be
-  referenced to the internal generator or to another input.
-- **Noise Dose** — LEQ, LAeq, LCeq, LAFmax, LApeak and LCpeak with continuous
-  CSV logging, plus exposure dose against a configurable limit. Ships two
-  presets, both EU Directive 2003/10/EC exposure action values, each carrying
-  its source and date.
-
-**On the noise limits:** they are user-editable presets, not a legal database.
-Phonetic shows a measured level against the limit you configured; it does not
-issue a compliance verdict and none of this is legal advice. Confirm any figure
-against the regulation or contract that actually binds you.
-
-**On standards:** the A- and C-weighting filters follow the IEC 61672-1 analog
-prototype via a prewarped bilinear transform. They track the reference curve to
-within about 1 dB from 20 Hz to 10 kHz, but deviate by roughly 3 dB at 16 kHz,
-and that residual has not been checked against the standard's Class 1 tolerance
-table. Treat the weighting as nominal, not as certified conformance. The NC and
-NR tables were transcribed from published references rather than the paywalled
-standards themselves; the citations are in `dsp/room_criteria.rs`.
-
-### Export
-
-- CSV, JSON, and SMAART-compatible TXT formats
-- Transfer function and impulse response export
-
-### UI
-
-- Modern dark/light theme with full support across all visualizations
-- 60fps WebGL or uPlot spectrum visualization (user selectable)
-- Glassmorphism design
-- Settings dialog with FFT size and backend selection
-
-## Measurement Accuracy
-
-An audio analyzer is only worth as much as your trust in its numbers. Most measurement
-software asks you to take that on faith. Phonetic publishes its working.
-
-The suite in [`apps/desktop/src-tauri/tests/dsp_accuracy.rs`](apps/desktop/src-tauri/tests/dsp_accuracy.rs)
-measures signals whose correct answer is known **analytically** — derived from theory, not
-captured from an earlier run of this same software. A closed-form filter, a synthesised decay
-with a chosen T60, a published standards table. If the DSP drifts, these fail with a number you
-can read off against the maths.
-
-| Property under test | Analytical reference | Tolerance | Measured |
-|---|---|---|---|
-| Identity path (ref = meas) | 0 dB, coherence 1.0 | 0.01 dB | ✅ pass |
-| Known gain (×0.5) | −6.0206 dB | 0.01 dB | ✅ pass |
-| Inverted polarity | 180° | 1° | ✅ pass |
-| **One-pole lowpass response** | `H(ω) = (1−a)/(1−a·e^−jω)` | **0.5 dB / 2°, 100 Hz–15 kHz** | ✅ pass |
-| Coherence vs. noise | `γ² = SNR/(1+SNR)` at 0, 10, 20 dB | 0.03 | ✅ pass |
-| Pure delay (1 ms) | flat 1.00 ms group delay | 0.05 ms | ✅ pass |
-| A-weighting | IEC 61672-1 Table 3, 8 frequencies | 0.2 dB | ✅ pass |
-| RT60 estimation | synthesised T60 = 200 ms | 10% | ✅ pass |
-| Multi-window LF resolution | `H(ω)` of a one-pole at 25 Hz | 1.0 dB | ✅ pass |
-
-The fourth row is the load-bearing one. A one-pole lowpass has an exact closed-form magnitude
-and phase response. Recovering it to within 0.5 dB and 2° across the audio band means the
-dual-FFT engine — windowing, overlap, cross-spectrum averaging, phase unwrapping — is correct,
-not merely self-consistent.
-
-**These assertions have teeth.** Perturbing the reference filter coefficient by 2% (0.90 → 0.88)
-fails the magnitude check at 1.673 dB, so the suite detects errors well below the threshold at
-which a listener or a rival analyzer would notice one.
-
-Run them yourself:
+Right-click → Open no longer bypasses Gatekeeper on macOS 15 and later. The Terminal
+equivalent of steps 2 and 3 is to strip the quarantine flag that the download added:
 
 ```bash
-just test-rust                                  # full suite
-cargo test --test dsp_accuracy -- --nocapture   # accuracy suite only
+xattr -dr com.apple.quarantine /Applications/Phonetic.app
+xattr -d  com.apple.quarantine ~/Downloads/phonetic-cli-macos-arm64   # CLI, if you use it
 ```
 
-## Headless measurement
+Requires macOS 11 or later.
 
-Phonetic ships a scriptable CLI, which no other analyzer in this category offers.
-Measure from a recording, verify an install from a script, or regression-test a room
-after a change:
+### Linux
+
+```bash
+sudo apt install ./Phonetic_<version>_amd64.deb          # Debian, Ubuntu
+sudo dnf install ./Phonetic-<version>-1.x86_64.rpm       # Fedora, RHEL
+chmod +x Phonetic_<version>_amd64.AppImage && ./Phonetic_<version>_amd64.AppImage   # anything else
+```
+
+Needs WebKitGTK 4.1 (Ubuntu 22.04+, Debian 12+, Fedora 36+). Audio goes through ALSA, which
+PipeWire and PulseAudio both provide. The AppImage needs FUSE 2 (`libfuse2` on Ubuntu) or run
+it with `--appimage-extract-and-run`.
+
+Windows is not supported.
+
+## What it measures
+
+- **Spectrum**: real-time FFT with peak hold, 60 fps WebGL or uPlot rendering, dark and light themes.
+- **Transfer function**: magnitude, phase, group delay and coherence between any reference and
+  measurement input, with averaging, smoothing, multi-window low-frequency resolution and auto-zoom.
+- **Impulse response** with RT60 estimate; **delay finder** by cross-correlation.
+- **Signal generator**: sine, pink noise, white noise, logarithmic sweep.
+- **SPL and calibration**: dBFS and calibrated dB SPL, `.cal` microphone files, sensitivity and
+  preamp gain, A- and C-weighting, reference overlays (ISO 226, X-curve, house curve).
+- **Channel matrix**: up to 32 inputs, several measurement pairs at once, each with its own delay
+  and calibration offset, referenced to the generator or to another input.
+- **Room criteria**: NC (ANSI S12.2) and NR (ISO 1996) by the tangency method, plus RC Mark II.
+  Needs calibrated SPL.
+- **Noise dose**: LEQ, LAeq, LCeq, LAFmax, LApeak, LCpeak with continuous CSV logging and exposure
+  dose against editable limit presets (EU Directive 2003/10/EC action values ship as defaults).
+- **Sessions and export**: save and reload sessions; export CSV, JSON and SMAART-compatible TXT.
+
+The CoreAudio backend (lower latency, exclusive mode, real-time thread priority) is macOS only.
+The cross-platform CPAL backend is the default on both systems and is what Linux uses.
+
+## Headless CLI
+
+`phonetic-cli` runs the same DSP without the window. Use it to measure from a recording,
+verify an install from a script, or regression-test a room after a change.
 
 ```bash
 phonetic-cli measure --file room.wav --reference-channel 0 --measurement-channel 1
 phonetic-cli measure --file room.wav --format csv > room.csv
 phonetic-cli devices
-phonetic-cli selftest        # verify the DSP against a known signal
+phonetic-cli selftest        # checks the DSP against a known signal, exit code 0 on pass
 ```
 
-## Tech Stack
+## Measurement accuracy
 
-- **Backend**: Rust (Tauri 2 + CPAL + realfft)
-- **Frontend**: React 19 + TypeScript + TailwindCSS 4
-- **Build**: Turborepo + Bun
+The suite in [`apps/desktop/src-tauri/tests/dsp_accuracy.rs`](apps/desktop/src-tauri/tests/dsp_accuracy.rs)
+feeds the engine signals whose correct answer is known analytically, so a drift in the DSP fails
+with a number you can check against the maths rather than against an earlier run of the same code.
 
-## Development
+| Property under test | Analytical reference | Tolerance |
+|---|---|---|
+| Identity path (ref = meas) | 0 dB, coherence 1.0 | 0.01 dB |
+| Known gain (×0.5) | −6.0206 dB | 0.01 dB |
+| Inverted polarity | 180° | 1° |
+| **One-pole lowpass response** | `H(ω) = (1−a)/(1−a·e^−jω)` | **0.5 dB / 2°, 100 Hz–15 kHz** |
+| Coherence vs. noise | `γ² = SNR/(1+SNR)` at 0, 10, 20 dB | 0.03 |
+| Pure delay (1 ms) | flat 1.00 ms group delay | 0.05 ms |
+| A-weighting | IEC 61672-1 Table 3, 8 frequencies | 0.2 dB |
+| RT60 estimation | synthesised T60 = 200 ms | 10% |
+| Multi-window LF resolution | `H(ω)` of a one-pole at 25 Hz | 1.0 dB |
+
+The lowpass row is the load-bearing one: recovering a closed-form magnitude and phase to 0.5 dB
+and 2° across the band means windowing, overlap, cross-spectrum averaging and phase unwrapping
+are right, not merely self-consistent. Perturbing the reference coefficient by 2 % fails the
+check at 1.67 dB, so the suite catches errors well below what a listener would notice.
 
 ```bash
-# Install dependencies
-just install
-
-# Run in development mode
-just dev
-
-# Build for production
-just build-release
-
-# Run checks
-just check
-
-# Run tests
-just test
+just test-accuracy     # accuracy suite only
+just test              # everything
 ```
 
-## Project Structure
+**Standards caveats.** The A- and C-weighting filters follow the IEC 61672-1 analogue prototype
+via a prewarped bilinear transform and track it within about 1 dB up to 10 kHz, but deviate by
+roughly 3 dB at 16 kHz and have not been checked against the Class 1 tolerance table; treat the
+weighting as nominal. The NC and NR tables are transcribed from published references, not the
+paywalled standards (citations in `dsp/room_criteria.rs`). The noise limits are editable presets,
+not a legal database: Phonetic shows a level against the limit you configured and issues no
+compliance verdict. Confirm any figure against the regulation or contract that binds you.
 
+## Build from source
+
+Rust (stable), Bun 1.x and [just](https://github.com/casey/just). Rust and Bun are installed
+on demand by `just install` if missing.
+
+```bash
+just install-deps-linux   # Linux only: WebKitGTK, GTK, ALSA and friends (Debian/Ubuntu names)
+just install              # Rust, Bun, JS and Rust dependencies
+just dev                  # run the app with hot reload
+just check                # Biome, clippy, rustfmt
+just test                 # Rust and TypeScript suites
+just dist                 # installers for this OS: .app + .dmg, or .deb + .rpm + .AppImage
+just cli-release          # the headless CLI only
 ```
-phonetic/
-├── apps/
-│   └── desktop/          # Tauri app
-│       ├── src/          # React frontend
-│       └── src-tauri/    # Rust backend
-├── packages/             # Shared packages
-├── justfile             # Task runner
-└── turbo.json           # Monorepo config
+
+Rust 1.70+ and Bun 1.0+ are the minimums. Tauri 2 drives the window; the DSP is plain Rust.
+
+## Releases
+
+Every push and pull request runs lint, both test suites, the CLI selftest and a debug bundle on
+macOS arm64, macOS Intel, Linux x86_64 and Linux arm64. Pushing a tag builds release installers on
+all four and publishes them with a changelog:
+
+```bash
+just tag 0.2.0            # creates and pushes v0.2.0
 ```
-
-## Requirements
-
-- macOS 11.0+ (Apple Silicon optimized)
-- Rust 1.70+
-- Bun 1.0+
 
 ## License
 
-Proprietary - Commercial software with license key activation.
+See [LICENSE](LICENSE).
