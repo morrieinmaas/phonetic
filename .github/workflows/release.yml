@@ -1,5 +1,10 @@
 # Phonetic Release Pipeline
-# Creates releases with changelog on version tags
+# Builds installers for every supported OS/arch on a version tag and
+# publishes a GitHub Release with a changelog.
+#
+# macOS builds are ad-hoc signed (bundle.macOS.signingIdentity = "-" in
+# tauri.conf.json), not Developer ID signed or notarised. Gatekeeper will ask
+# the user to approve the first launch; the release notes below explain how.
 
 name: Release
 
@@ -16,25 +21,32 @@ permissions:
 
 jobs:
   build-release:
-    name: Build Release
+    name: Build (${{ matrix.name }})
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Primary target: Apple Silicon
-          - platform: macos-14
-            target: aarch64-apple-darwin
+          - os: macos-latest
             name: macos-arm64
-          # Optional: Intel Mac (uncomment if needed)
-          # - platform: macos-13
-          #   target: x86_64-apple-darwin
-          #   name: macos-x64
+          - os: macos-15-intel
+            name: macos-x64
+          - os: ubuntu-22.04
+            name: linux-x64
+          - os: ubuntu-22.04-arm
+            name: linux-arm64
 
-    runs-on: ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # Full history for changelog
+
+      # Ubuntu 22.04 is the oldest base that ships WebKitGTK 4.1, which keeps
+      # the glibc requirement of the .deb/.rpm/.AppImage as low as possible.
+      - name: Install Tauri Linux packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -43,41 +55,44 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/desktop/src-tauri
-          key: ${{ matrix.target }}
 
       - name: Install JS dependencies
         run: bun install --frozen-lockfile
 
-      - name: Run tests
-        run: |
-          cd apps/desktop/src-tauri && cargo test
-          bun test || true
-
       - name: Build frontend
         run: cd apps/desktop && bun run build
 
-      - name: Build Tauri app (release)
-        run: cd apps/desktop && bunx tauri build --target ${{ matrix.target }}
+      - name: Run tests
+        run: |
+          cd apps/desktop/src-tauri && cargo test
+          cd ../ && bun test
 
-      - name: Prepare release artifacts
+      - name: Build Tauri app (release)
+        run: cd apps/desktop && bunx tauri build
+
+      - name: Collect installers
         run: |
           set -euo pipefail
           mkdir -p release-artifacts
-          cp -r apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app release-artifacts/
-          cp apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg release-artifacts/
+          B=apps/desktop/src-tauri/target/release/bundle
+          for f in "$B"/dmg/*.dmg "$B"/deb/*.deb "$B"/rpm/*.rpm "$B"/appimage/*.AppImage; do
+            [ -e "$f" ] && cp "$f" release-artifacts/
+          done
+          # tauri build compiles every bin target, so the headless CLI is already there
+          cp apps/desktop/src-tauri/target/release/phonetic-cli "release-artifacts/phonetic-cli-${{ matrix.name }}"
+          ls -la release-artifacts
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: phonetic-${{ matrix.name }}
           path: release-artifacts/*
+          if-no-files-found: error
           retention-days: 30
 
   create-release:
@@ -92,45 +107,23 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          path: release-assets
+          merge-multiple: true
 
       - name: Generate changelog
         id: changelog
         run: |
-          # Get the previous tag
           PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-
           if [ -z "$PREV_TAG" ]; then
-            echo "changelog=Initial release" >> $GITHUB_OUTPUT
+            CHANGELOG="Initial release"
           else
-            # Generate changelog from commits
-            CHANGELOG=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges)
-            # Escape for GitHub Actions
-            CHANGELOG="${CHANGELOG//'%'/'%25'}"
-            CHANGELOG="${CHANGELOG//$'\n'/'%0A'}"
-            CHANGELOG="${CHANGELOG//$'\r'/'%0D'}"
-            echo "changelog=${CHANGELOG}" >> $GITHUB_OUTPUT
+            CHANGELOG=$(git log "${PREV_TAG}..HEAD" --pretty=format:"- %s (%h)" --no-merges)
           fi
-
-      - name: Prepare release assets
-        run: |
-          mkdir -p release-assets
-          # Package each platform's artifacts
-          for dir in artifacts/*/; do
-            platform=$(basename "$dir")
-            if [ -d "$dir" ]; then
-              # Create zip for .app bundles
-              if ls "$dir"/*.app 1> /dev/null 2>&1; then
-                cd "$dir"
-                zip -r "../../release-assets/${platform}.zip" *.app
-                cd ../..
-              fi
-              # Copy DMG files directly
-              if ls "$dir"/*.dmg 1> /dev/null 2>&1; then
-                cp "$dir"/*.dmg release-assets/
-              fi
-            fi
-          done
+          {
+            echo "changelog<<CHANGELOG_EOF"
+            echo "$CHANGELOG"
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -143,16 +136,35 @@ jobs:
             ${{ steps.changelog.outputs.changelog }}
 
             ### Downloads
-            - **macOS (Apple Silicon)**: Download the `.dmg` file for easy installation
-            - **macOS (App Bundle)**: Download the `.zip` for the raw application bundle
+            | Platform | File |
+            |---|---|
+            | macOS, Apple Silicon | `Phonetic_*_aarch64.dmg` |
+            | macOS, Intel | `Phonetic_*_x64.dmg` |
+            | Linux x86_64 | `*_amd64.deb`, `*.x86_64.rpm`, `*_amd64.AppImage` |
+            | Linux arm64 | `*_arm64.deb`, `*.aarch64.rpm`, `*_aarch64.AppImage` |
+            | Headless CLI | `phonetic-cli-<platform>` (single binary; `chmod +x` it) |
 
-            ### Requirements
-            - macOS 11.0+ (Apple Silicon optimized)
+            ### Installing on macOS
+            Phonetic is not signed with an Apple Developer ID, so macOS blocks
+            the first launch. This is expected; the build is reproducible from
+            the tagged source in this repository.
 
-            ### Installation
-            1. Download the `.dmg` file
-            2. Open and drag Phonetic to Applications
-            3. Grant microphone access when prompted
+            1. Open the `.dmg` and drag Phonetic to Applications.
+            2. Double-click Phonetic. macOS reports it cannot verify the app. Click **Done**.
+            3. Open **System Settings → Privacy & Security**, scroll to **Security**,
+               and click **Open Anyway** next to Phonetic. Confirm with your password or Touch ID.
+            4. Launch Phonetic again and grant microphone access when asked.
+
+            Terminal alternative to steps 2 and 3:
+            `xattr -dr com.apple.quarantine /Applications/Phonetic.app`
+
+            ### Installing on Linux
+            - Debian/Ubuntu: `sudo apt install ./Phonetic_*.deb`
+            - Fedora/RHEL: `sudo dnf install ./Phonetic-*.rpm`
+            - Any distro: `chmod +x Phonetic_*.AppImage && ./Phonetic_*.AppImage`
+
+            Requires WebKitGTK 4.1 (Ubuntu 22.04+, Debian 12+, Fedora 36+).
+            Audio runs through ALSA; PipeWire and PulseAudio work via their ALSA layer.
           files: release-assets/*
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}

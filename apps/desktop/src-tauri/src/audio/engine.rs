@@ -244,9 +244,10 @@ impl AudioEngine {
             AudioBackend::CoreAudio => "core_audio",
         };
 
-        let mut available = vec!["cpal".to_string()];
         #[cfg(target_os = "macos")]
-        available.push("core_audio".to_string());
+        let available = vec!["cpal".to_string(), "core_audio".to_string()];
+        #[cfg(not(target_os = "macos"))]
+        let available = vec!["cpal".to_string()];
 
         AudioState {
             is_running: self.is_running.load(Ordering::Acquire),
@@ -264,11 +265,6 @@ impl AudioEngine {
 
     /// Set the audio backend (takes effect on next stream start)
     pub fn set_backend(&self, backend: AudioBackend) -> Result<(), String> {
-        #[cfg(not(target_os = "macos"))]
-        if matches!(backend, AudioBackend::CoreAudio) {
-            return Err("CoreAudio is only available on macOS".to_string());
-        }
-
         self.backend.store(backend as u8, Ordering::Relaxed);
         log::info!("Audio backend set to {:?}", backend);
         Ok(())
@@ -298,10 +294,8 @@ impl AudioEngine {
         // Stop any existing stream first
         self.stop_stream();
 
-        let backend = self.get_backend();
-
         #[cfg(target_os = "macos")]
-        if backend == AudioBackend::CoreAudio {
+        if self.get_backend() == AudioBackend::CoreAudio {
             return self.start_coreaudio_stream(input_device_id, output_device_id);
         }
 

@@ -19,15 +19,21 @@ default:
 # Setup & Dependencies
 # ============================================================================
 
-# Install system dependencies (macOS)
-install-deps-macos:
+# Install Linux build packages for Tauri and ALSA (Debian/Ubuntu)
+install-deps-linux:
+    sudo apt-get update
+    sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+        libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev
+
+# Install Rust and Bun if missing (macOS and Linux)
+install-deps:
     @echo "Checking system dependencies..."
     @command -v rustc >/dev/null 2>&1 || (echo "Installing Rust..." && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y)
     @command -v bun >/dev/null 2>&1 || (echo "Installing Bun..." && curl -fsSL https://bun.sh/install | bash)
     @echo "System dependencies OK"
 
 # Install project dependencies (JS + Rust)
-install: install-deps-macos
+install: install-deps
     bun install
     cd {{tauri}} && cargo fetch
 
@@ -184,34 +190,15 @@ test-all: test test-accuracy test-e2e
 # Distribution
 # ============================================================================
 
-# Build macOS app bundle (.app)
-dist-app: build-frontend
+# Build the installers for this OS: ad-hoc signed .app + .dmg on macOS,
+# .deb + .rpm + .AppImage on Linux (see bundle.targets in tauri.conf.json)
+dist: build-frontend
     cd {{desktop}} && bunx tauri build
-
-# Build macOS disk image (.dmg) from the .app bundle
-dist-dmg: dist-app
-    #!/usr/bin/env zsh
-    set -euo pipefail
-    APP="{{tauri}}/target/release/bundle/macos/Phonetic.app"
-    VERSION=$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")
-    ARCH=$(uname -m)
-    DMG_DIR="{{tauri}}/target/release/bundle/dmg"
-    DMG="$DMG_DIR/Phonetic_${VERSION}_${ARCH}.dmg"
-    mkdir -p "$DMG_DIR"
-    rm -f "$DMG"
-    echo "Ad-hoc signing $APP..."
-    codesign --force --deep --sign - "$APP"
-    codesign --verify "$APP" && echo "Signature valid"
-    echo "Creating DMG from $APP..."
-    hdiutil create -volname "Phonetic" -srcfolder "$APP" -ov -format UDZO "$DMG"
-    xattr -cr "$DMG"
-    echo "DMG ready: $DMG ($(du -h "$DMG" | cut -f1))"
 
 # Show built artifacts
 dist-show:
     @echo "Built artifacts:"
-    @ls -lh {{tauri}}/target/release/bundle/macos/*.app 2>/dev/null || echo "No .app builds."
-    @ls -lh {{tauri}}/target/release/bundle/dmg/*.dmg 2>/dev/null || echo "No .dmg builds."
+    @ls -lh {{tauri}}/target/release/bundle/*/* 2>/dev/null || echo "No bundles built yet. Run: just dist"
 
 # ============================================================================
 # CI Pipeline (used by GitHub Actions)
@@ -242,7 +229,7 @@ ci: ci-install ci-check ci-test ci-build
 # ============================================================================
 
 # Full release: check, test, build
-release: check test dist-dmg
+release: check test dist
     @echo "Release build complete!"
     just dist-show
 

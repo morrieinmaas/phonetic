@@ -32,7 +32,7 @@
 	},
 	"bundle": {
 		"active": true,
-		"targets": ["app", "dmg"],
+		"targets": "all",
 		"icon": [
 			"icons/32x32.png",
 			"icons/128x128.png",
@@ -41,6 +41,7 @@
 			"icons/icon.ico"
 		],
 		"macOS": {
+			"signingIdentity": "-",
 			"entitlements": "./entitlements.plist",
 			"minimumSystemVersion": "11.0",
 			"infoPlist": "./Info.plist"

@@ -1,5 +1,5 @@
 # Phonetic CI Pipeline
-# Runs lint, format check, tests, and build on push/PR
+# Lint once, then test and build on every supported OS/arch.
 
 name: CI
 
@@ -16,9 +16,15 @@ env:
 jobs:
   lint-format:
     name: Lint & Format
-    runs-on: macos-14  # Apple Silicon runner
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install Tauri Linux packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -51,12 +57,31 @@ jobs:
       - name: Rust clippy
         run: cd apps/desktop/src-tauri && cargo clippy --all-targets --all-features -- -D warnings
 
-  test:
-    name: Test
-    runs-on: macos-14
+  test-build:
+    name: Test & Build (${{ matrix.name }})
     needs: lint-format
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            name: macos-arm64
+          - os: macos-15-intel
+            name: macos-x64
+          - os: ubuntu-22.04
+            name: linux-x64
+          - os: ubuntu-22.04-arm
+            name: linux-arm64
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install Tauri Linux packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -90,39 +115,13 @@ jobs:
       # Must run from apps/desktop: bunfig.toml there preloads the happy-dom
       # registrar and the testing-library cleanup, and bun only reads a bunfig
       # from the working directory. From the repo root the component tests fail
-      # with "document is not defined". All 21 test files live under
-      # apps/desktop, so nothing is skipped by scoping it.
+      # with "document is not defined". All test files live under apps/desktop,
+      # so nothing is skipped by scoping it.
       - name: TypeScript tests
         run: cd apps/desktop && bun test
 
       - name: CLI selftest
         run: cd apps/desktop/src-tauri && cargo run --bin phonetic-cli -- selftest
-
-  build:
-    name: Build
-    runs-on: macos-14
-    needs: test
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: apps/desktop/src-tauri
-
-      - name: Install JS dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Build frontend
-        run: cd apps/desktop && bun run build
 
       - name: Build Tauri app (debug)
         run: cd apps/desktop && bunx tauri build --debug
@@ -130,7 +129,12 @@ jobs:
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: phonetic-macos-arm64-debug
+          name: phonetic-${{ matrix.name }}-debug
           path: |
             apps/desktop/src-tauri/target/debug/bundle/macos/*.app
+            apps/desktop/src-tauri/target/debug/bundle/dmg/*.dmg
+            apps/desktop/src-tauri/target/debug/bundle/deb/*.deb
+            apps/desktop/src-tauri/target/debug/bundle/rpm/*.rpm
+            apps/desktop/src-tauri/target/debug/bundle/appimage/*.AppImage
+          if-no-files-found: error
           retention-days: 7
