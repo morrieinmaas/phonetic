@@ -18,10 +18,16 @@ notice.
 
 Software: Phonetic
 License: Apache 2.0
-Licensor: Moritz, traect.dev (mo@traect.dev)
+Licensor: Moritz, mo [at] traect [dot] dev
 
-Commercial licences that include the right to Sell are available from the
-Licensor on request.
+Want to sell it, bundle it in a paid product, or just reach out? Write to
+the address above.
+
+The Software is free and open source and comes with NO WARRANTY OR
+GUARANTEE OF ANY KIND, express or implied, and no liability whatsoever;
+see sections 7 and 8 of the Apache License below. Measurements it reports
+are not certified and must not be relied on for compliance, safety or
+legal purposes without independent verification.
 
 ---------------------------------------------------------------------------
 
@@ -214,7 +220,7 @@ Licensor on request.
       same "printed page" as the copyright notice for easier
       identification within third-party archives.
 
-   Copyright 2026 Moritz, traect.dev
+   Copyright 2026 Moritz
 
    Licensed under the Apache License, Version 2.0 (the "License");
    you may not use this file except in compliance with the License.

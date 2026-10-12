@@ -154,4 +154,8 @@ just tag 0.2.0            # creates and pushes v0.2.0
 Apache License 2.0 with the [Commons Clause](https://commonsclause.com) condition; see
 [LICENSE](LICENSE). In short: use it, modify it, redistribute it, use it on paid jobs, but
 you may not sell Phonetic itself or a product or service whose value comes substantially
-from it. Commercial licences are available on request from mo@traect.dev.
+from it. Want to? Or anything else? Write to mo [at] traect [dot] dev.
+
+Phonetic is free software and comes with **no warranty or guarantee of any kind**. Its
+readings are not certified; verify independently before relying on them for compliance,
+safety or legal purposes.
