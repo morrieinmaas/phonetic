@@ -8,7 +8,6 @@ import { DiagnosticsBanner } from "./components/diagnostics-banner";
 import { GeneratorControls } from "./components/generator-controls";
 import { LeqPanel } from "./components/leq-panel";
 import type { LeqPanelMetrics } from "./components/leq-panel";
-import { LicenseDialog, shouldBlockUsage } from "./components/license-dialog";
 import { PermissionDialog } from "./components/permission-dialog";
 import { RoomCriteriaPanel } from "./components/room-criteria-panel";
 import { SessionControls } from "./components/session-controls";
@@ -24,7 +23,6 @@ import { audioApi } from "./services/audio-api";
 import { useAudioStore } from "./stores/audio-store";
 import type {
 	DoseResult,
-	LicenseState,
 	NoiseLimit,
 	RcResult,
 	RoomCriteriaFamily,
@@ -92,7 +90,6 @@ export const App = () => {
 	});
 
 	const [settingsOpen, setSettingsOpen] = useState(false);
-	const [licenseState, setLicenseState] = useState<LicenseState | null>(null);
 	const [permissionDialogOpen, setPermissionDialogOpen] = useState(false);
 	const [routing, setRoutingState] = useState<Routing>({ pairs: [] });
 	const [isMultiWindow, setIsMultiWindow] = useState(false);
@@ -174,13 +171,6 @@ export const App = () => {
 	useEffect(() => {
 		localStorage.setItem("phonetic-secondary-view", secondaryView);
 	}, [secondaryView]);
-
-	useEffect(() => {
-		audioApi
-			.getLicenseState()
-			.then(setLicenseState)
-			.catch(() => setLicenseState(null));
-	}, []);
 
 	useEffect(() => {
 		audioApi
@@ -473,194 +463,185 @@ export const App = () => {
 				className="pointer-events-none fixed right-4 top-16 z-40 flex w-full max-w-sm flex-col gap-2"
 			>
 				<div className="pointer-events-auto contents">
-					{licenseState && !shouldBlockUsage(licenseState) && (
-						<LicenseDialog state={licenseState} onStateChange={setLicenseState} />
-					)}
 					<DiagnosticsBanner />
 				</div>
 			</div>
 
 			{/* Main content */}
-			{licenseState && shouldBlockUsage(licenseState) ? (
-				<div className="flex flex-1 items-center justify-center p-4">
-					<LicenseDialog state={licenseState} onStateChange={setLicenseState} />
-				</div>
-			) : (
-				<main className="flex flex-1 gap-4 p-4 min-h-0">
-					{/* Sidebar - Device & Generator controls */}
-					<aside className="glass w-72 flex-shrink-0 rounded-lg p-4 flex flex-col gap-6 overflow-y-auto">
-						{/* Audio Devices Section */}
-						<div className="flex flex-col gap-4">
-							<h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-								Audio Devices
-							</h2>
+			<main className="flex flex-1 gap-4 p-4 min-h-0">
+				{/* Sidebar - Device & Generator controls */}
+				<aside className="glass w-72 flex-shrink-0 rounded-lg p-4 flex flex-col gap-6 overflow-y-auto">
+					{/* Audio Devices Section */}
+					<div className="flex flex-col gap-4">
+						<h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+							Audio Devices
+						</h2>
 
-							{devices ? (
-								<>
-									<DeviceSelector
-										label="Input"
-										testId="input-device-select"
-										devices={devices.inputs}
-										selectedDeviceId={selectedInputDevice}
-										defaultDeviceId={devices.default_input}
-										onSelect={setSelectedInputDevice}
-										disabled={isRunning}
-									/>
+						{devices ? (
+							<>
+								<DeviceSelector
+									label="Input"
+									testId="input-device-select"
+									devices={devices.inputs}
+									selectedDeviceId={selectedInputDevice}
+									defaultDeviceId={devices.default_input}
+									onSelect={setSelectedInputDevice}
+									disabled={isRunning}
+								/>
 
-									<DeviceSelector
-										label="Output"
-										devices={devices.outputs}
-										selectedDeviceId={selectedOutputDevice}
-										defaultDeviceId={devices.default_output}
-										onSelect={setSelectedOutputDevice}
-										disabled={isRunning}
-									/>
+								<DeviceSelector
+									label="Output"
+									devices={devices.outputs}
+									selectedDeviceId={selectedOutputDevice}
+									defaultDeviceId={devices.default_output}
+									onSelect={setSelectedOutputDevice}
+									disabled={isRunning}
+								/>
 
-									<ChannelSelector
-										inputDevice={selectedInputAudioDevice}
-										channelCount={inputChannelCount}
-										measurementChannel={measurementChannel}
-										onChannelCountChange={setInputChannelCount}
-										onMeasurementChannelChange={setMeasurementChannel}
-										disabled={isRunning}
-									/>
+								<ChannelSelector
+									inputDevice={selectedInputAudioDevice}
+									channelCount={inputChannelCount}
+									measurementChannel={measurementChannel}
+									onChannelCountChange={setInputChannelCount}
+									onMeasurementChannelChange={setMeasurementChannel}
+									disabled={isRunning}
+								/>
 
-									<button
-										type="button"
-										onClick={isRunning ? handleStopStream : handleStartStream}
-										disabled={isLoading}
-										className={`w-full rounded-md py-2.5 text-sm font-semibold transition-colors ${
-											isRunning
-												? "bg-red-500 text-white hover:bg-red-600"
-												: "bg-primary text-primary-foreground hover:bg-primary/90"
-										} disabled:cursor-not-allowed disabled:opacity-50`}
-									>
-										{isLoading ? "..." : isRunning ? "Stop Stream" : "Start Stream"}
-									</button>
-								</>
+								<button
+									type="button"
+									onClick={isRunning ? handleStopStream : handleStartStream}
+									disabled={isLoading}
+									className={`w-full rounded-md py-2.5 text-sm font-semibold transition-colors ${
+										isRunning
+											? "bg-red-500 text-white hover:bg-red-600"
+											: "bg-primary text-primary-foreground hover:bg-primary/90"
+									} disabled:cursor-not-allowed disabled:opacity-50`}
+								>
+									{isLoading ? "..." : isRunning ? "Stop Stream" : "Start Stream"}
+								</button>
+							</>
+						) : (
+							<p className="text-sm text-muted-foreground">Loading devices...</p>
+						)}
+					</div>
+
+					{/* Divider */}
+					<div className="border-t border-border" />
+
+					{/* Generator Controls */}
+					<GeneratorControls
+						isActive={generatorActive}
+						signalType={generatorType}
+						frequency={generatorFrequency}
+						amplitude={generatorAmplitude}
+						onSignalTypeChange={setGeneratorType}
+						onFrequencyChange={setGeneratorFrequency}
+						onAmplitudeChange={setGeneratorAmplitude}
+						onStart={startGenerator}
+						onStop={stopGenerator}
+						disabled={!isRunning}
+					/>
+
+					{/* Error display */}
+					{error && (
+						<div className="rounded-md bg-red-500/10 border border-red-500/20 p-3 text-sm text-red-400">
+							<div className="flex justify-between items-start">
+								<span>{error}</span>
+								<button
+									type="button"
+									onClick={clearError}
+									className="text-red-400 hover:text-red-300"
+								>
+									×
+								</button>
+							</div>
+						</div>
+					)}
+				</aside>
+
+				{/* Main visualization area */}
+				<div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
+					{/* Spectrum analyzer - takes slightly more space */}
+					<div className="glass flex min-h-[360px] flex-[1.2] flex-col rounded-lg p-4">
+						{/* Renderer toggle */}
+						<div className="flex items-center justify-end gap-2 mb-2 flex-shrink-0">
+							<span className="text-xs text-muted-foreground">Renderer:</span>
+							<div className="flex rounded-md border border-border overflow-hidden">
+								<button
+									type="button"
+									onClick={() => setSpectrumRenderer("uplot")}
+									className={`px-2 py-1 text-xs transition-colors ${
+										spectrumRenderer === "uplot"
+											? "bg-primary text-primary-foreground"
+											: "bg-transparent text-muted-foreground hover:bg-muted"
+									}`}
+								>
+									uPlot
+								</button>
+								<button
+									type="button"
+									onClick={() => setSpectrumRenderer("webgl")}
+									className={`px-2 py-1 text-xs transition-colors ${
+										spectrumRenderer === "webgl"
+											? "bg-primary text-primary-foreground"
+											: "bg-transparent text-muted-foreground hover:bg-muted"
+									}`}
+								>
+									WebGL
+								</button>
+							</div>
+						</div>
+						{/* Spectrum visualizer */}
+						<div className="flex-1 min-h-0">
+							{spectrumRenderer === "webgl" ? (
+								<WebGLSpectrum
+									spectrumData={spectrumData}
+									sampleRate={audioState?.sample_rate ?? 48000}
+									fftSize={fftSize}
+									isRunning={isRunning}
+								/>
 							) : (
-								<p className="text-sm text-muted-foreground">Loading devices...</p>
+								<SpectrumAnalyzer
+									spectrumData={spectrumData}
+									sampleRate={audioState?.sample_rate ?? 48000}
+									fftSize={fftSize}
+									isRunning={isRunning}
+								/>
 							)}
 						</div>
-
-						{/* Divider */}
-						<div className="border-t border-border" />
-
-						{/* Generator Controls */}
-						<GeneratorControls
-							isActive={generatorActive}
-							signalType={generatorType}
-							frequency={generatorFrequency}
-							amplitude={generatorAmplitude}
-							onSignalTypeChange={setGeneratorType}
-							onFrequencyChange={setGeneratorFrequency}
-							onAmplitudeChange={setGeneratorAmplitude}
-							onStart={startGenerator}
-							onStop={stopGenerator}
-							disabled={!isRunning}
-						/>
-
-						{/* Error display */}
-						{error && (
-							<div className="rounded-md bg-red-500/10 border border-red-500/20 p-3 text-sm text-red-400">
-								<div className="flex justify-between items-start">
-									<span>{error}</span>
-									<button
-										type="button"
-										onClick={clearError}
-										className="text-red-400 hover:text-red-300"
-									>
-										×
-									</button>
-								</div>
-							</div>
-						)}
-					</aside>
-
-					{/* Main visualization area */}
-					<div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
-						{/* Spectrum analyzer - takes slightly more space */}
-						<div className="glass flex min-h-[360px] flex-[1.2] flex-col rounded-lg p-4">
-							{/* Renderer toggle */}
-							<div className="flex items-center justify-end gap-2 mb-2 flex-shrink-0">
-								<span className="text-xs text-muted-foreground">Renderer:</span>
-								<div className="flex rounded-md border border-border overflow-hidden">
-									<button
-										type="button"
-										onClick={() => setSpectrumRenderer("uplot")}
-										className={`px-2 py-1 text-xs transition-colors ${
-											spectrumRenderer === "uplot"
-												? "bg-primary text-primary-foreground"
-												: "bg-transparent text-muted-foreground hover:bg-muted"
-										}`}
-									>
-										uPlot
-									</button>
-									<button
-										type="button"
-										onClick={() => setSpectrumRenderer("webgl")}
-										className={`px-2 py-1 text-xs transition-colors ${
-											spectrumRenderer === "webgl"
-												? "bg-primary text-primary-foreground"
-												: "bg-transparent text-muted-foreground hover:bg-muted"
-										}`}
-									>
-										WebGL
-									</button>
-								</div>
-							</div>
-							{/* Spectrum visualizer */}
-							<div className="flex-1 min-h-0">
-								{spectrumRenderer === "webgl" ? (
-									<WebGLSpectrum
-										spectrumData={spectrumData}
-										sampleRate={audioState?.sample_rate ?? 48000}
-										fftSize={fftSize}
-										isRunning={isRunning}
-									/>
-								) : (
-									<SpectrumAnalyzer
-										spectrumData={spectrumData}
-										sampleRate={audioState?.sample_rate ?? 48000}
-										fftSize={fftSize}
-										isRunning={isRunning}
-									/>
-								)}
-							</div>
-						</div>
-
-						{/* Secondary view - Transfer function or Spectrogram */}
-						<div className="glass flex min-h-[420px] flex-1 flex-col rounded-lg p-4">
-							{/* View toggle */}
-							{/* View toggle. Wraps rather than clipping: five labelled tabs
-							    overflow a narrow window, and the old segmented control had
-							    overflow-hidden, so tabs past the edge simply vanished. */}
-							<div className="mb-2 flex flex-shrink-0 flex-wrap items-center justify-end gap-2">
-								<span className="text-xs text-muted-foreground">View:</span>
-								<div className="flex flex-wrap gap-0.5 rounded-md border border-border p-0.5">
-									{SECONDARY_VIEWS.map((view) => (
-										<button
-											key={view}
-											type="button"
-											onClick={() => setSecondaryView(view)}
-											aria-pressed={secondaryView === view}
-											className={`whitespace-nowrap rounded px-2 py-1 text-xs transition-colors ${
-												secondaryView === view
-													? "bg-primary text-primary-foreground"
-													: "bg-transparent text-muted-foreground hover:bg-muted"
-											}`}
-										>
-											{SECONDARY_VIEW_LABELS[view]}
-										</button>
-									))}
-								</div>
-							</div>
-							{/* View content */}
-							<div className="flex-1 min-h-0">{secondaryViewContent[secondaryView]}</div>
-						</div>
 					</div>
-				</main>
-			)}
+
+					{/* Secondary view - Transfer function or Spectrogram */}
+					<div className="glass flex min-h-[420px] flex-1 flex-col rounded-lg p-4">
+						{/* View toggle */}
+						{/* View toggle. Wraps rather than clipping: five labelled tabs
+						    overflow a narrow window, and the old segmented control had
+						    overflow-hidden, so tabs past the edge simply vanished. */}
+						<div className="mb-2 flex flex-shrink-0 flex-wrap items-center justify-end gap-2">
+							<span className="text-xs text-muted-foreground">View:</span>
+							<div className="flex flex-wrap gap-0.5 rounded-md border border-border p-0.5">
+								{SECONDARY_VIEWS.map((view) => (
+									<button
+										key={view}
+										type="button"
+										onClick={() => setSecondaryView(view)}
+										aria-pressed={secondaryView === view}
+										className={`whitespace-nowrap rounded px-2 py-1 text-xs transition-colors ${
+											secondaryView === view
+												? "bg-primary text-primary-foreground"
+												: "bg-transparent text-muted-foreground hover:bg-muted"
+										}`}
+									>
+										{SECONDARY_VIEW_LABELS[view]}
+									</button>
+								))}
+							</div>
+						</div>
+						{/* View content */}
+						<div className="flex-1 min-h-0">{secondaryViewContent[secondaryView]}</div>
+					</div>
+				</div>
+			</main>
 
 			{/* Footer status bar */}
 			<StatusBar audioState={audioState} error={error} />

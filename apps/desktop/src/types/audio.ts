@@ -129,12 +129,6 @@ export interface BiquadFilter {
 	enabled: boolean;
 }
 
-/** Trial/licence status, matching the Rust `LicenseState` wire format exactly. */
-export type LicenseState =
-	| { state: "trial"; days_remaining: number }
-	| { state: "licensed"; key_suffix: string }
-	| { state: "expired" };
-
 /** Where a measurement pair takes its reference from. */
 export type ReferenceSource = { source: "generator" } | { source: "input"; channel: number };
 

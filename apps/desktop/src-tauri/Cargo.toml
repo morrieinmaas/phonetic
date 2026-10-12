@@ -32,9 +32,6 @@ hound = "3.5"
 # DSP
 realfft = "3"
 
-# Lock-free data structures
-ringbuf = "0.4"
-
 # Better synchronization primitives
 parking_lot = "0.12"
 
@@ -47,9 +44,6 @@ env_logger = "0.11"
 
 # CLI argument parsing
 clap = { version = "4", features = ["derive"] }
-
-# Licence activation. Blocking and tiny: this runs once per launch.
-ureq = { version = "2", features = ["json"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26"

@@ -2,7 +2,6 @@ pub mod audio;
 pub mod cli;
 mod commands;
 pub mod dsp;
-pub mod licensing;
 pub mod session;
 
 use tauri::Manager;
@@ -93,9 +92,6 @@ pub fn run() {
             commands::measure_wav_file,
             // Virtual EQ commands
             commands::predict_eq,
-            // Licensing
-            commands::get_license_state,
-            commands::activate_license,
             // Session save/load commands
             commands::save_session,
             commands::load_session,

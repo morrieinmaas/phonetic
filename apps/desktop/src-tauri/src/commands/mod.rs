@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime};
 
-use tauri::{Manager, State};
+use tauri::State;
 
 use crate::audio::{
     enumerate_devices, AudioBackend, AudioDeviceList, AudioEngine, AudioState, Routing, SignalType,
@@ -671,48 +671,6 @@ pub async fn predict_eq(
     sample_rate: f32,
 ) -> Result<TransferFunctionData, String> {
     Ok(predict_with_eq(&trace, &filters, sample_rate))
-}
-
-#[tauri::command]
-pub async fn get_license_state(
-    app: tauri::AppHandle,
-) -> Result<crate::licensing::LicenseState, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("locate app data directory: {e}"))?;
-    let record = crate::licensing::load_record(&dir);
-    // Persist the first-run date so the trial starts counting from launch one.
-    crate::licensing::save_record(&dir, &record).ok();
-    Ok(crate::licensing::evaluate(
-        &record,
-        crate::licensing::today(),
-    ))
-}
-
-#[tauri::command]
-pub async fn activate_license(
-    app: tauri::AppHandle,
-    key: String,
-) -> Result<crate::licensing::LicenseState, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("locate app data directory: {e}"))?;
-
-    if !crate::licensing::activate(&key)? {
-        return Err("That licence key was not accepted. Check it and try again.".into());
-    }
-
-    let mut record = crate::licensing::load_record(&dir);
-    record.key = Some(key);
-    record.activated = true;
-    crate::licensing::save_record(&dir, &record)?;
-
-    Ok(crate::licensing::evaluate(
-        &record,
-        crate::licensing::today(),
-    ))
 }
 
 #[tauri::command]

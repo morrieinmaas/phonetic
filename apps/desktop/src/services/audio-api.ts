@@ -8,7 +8,6 @@ import type {
 	Diagnosis,
 	DoseResult,
 	LeqMetrics,
-	LicenseState,
 	NoiseLimit,
 	RcResult,
 	ReferenceCurve,
@@ -318,22 +317,6 @@ export const audioApi = {
 	getRcRating: (): Promise<RcResult> => invoke<RcResult>("get_rc_rating"),
 
 	// ========================================================================
-	// Licensing
-	// ========================================================================
-
-	/**
-	 * Get the current trial/licence state, persisting the first-run date on first call.
-	 */
-	getLicenseState: (): Promise<LicenseState> => invoke<LicenseState>("get_license_state"),
-
-	/**
-	 * Activate a licence key with the licence server.
-	 * @param key - The licence key to activate
-	 */
-	activateLicense: (key: string): Promise<LicenseState> =>
-		invoke<LicenseState>("activate_license", { key }),
-
-	// ========================================================================
 	// LEQ / noise dose
 	// ========================================================================
 
@@ -393,7 +376,6 @@ export type {
 	DoseResult,
 	FilterType,
 	LeqMetrics,
-	LicenseState,
 	MeasurementPair,
 	NoiseLimit,
 	ReferenceCurve,
