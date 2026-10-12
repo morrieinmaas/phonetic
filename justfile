@@ -23,7 +23,7 @@ default:
 install-deps-linux:
     sudo apt-get update
     sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
-        libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev
+        libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev xdg-utils
 
 # Install Rust and Bun if missing (macOS and Linux)
 install-deps:
