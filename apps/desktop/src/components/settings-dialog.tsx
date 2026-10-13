@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
+import { binCount, windowLengthMs } from "../lib/fft-window";
 import { type AudioState, audioApi } from "../services/audio-api";
+import type { SmoothingFraction } from "../types/audio";
 
 interface SettingsDialogProps {
 	isOpen: boolean;
@@ -11,6 +13,17 @@ interface SettingsDialogProps {
 
 const FFT_SIZES = [512, 1024, 2048, 4096, 8192, 16384];
 
+/** Smoothing widths offered in the UI, narrowest first. */
+const SMOOTHING_OPTIONS: { value: SmoothingFraction; label: string }[] = [
+	{ value: "none", label: "None" },
+	{ value: "octave48", label: "1/48" },
+	{ value: "octave24", label: "1/24" },
+	{ value: "octave12", label: "1/12" },
+	{ value: "octave6", label: "1/6" },
+	{ value: "octave3", label: "1/3" },
+	{ value: "octave1", label: "1/1" },
+];
+
 export const SettingsDialog = ({
 	isOpen,
 	onClose,
@@ -21,6 +34,8 @@ export const SettingsDialog = ({
 	const [selectedBackend, setSelectedBackend] = useState<string>("cpal");
 	const [selectedFftSize, setSelectedFftSize] = useState<number>(currentFftSize);
 	const [exclusiveMode, setExclusiveMode] = useState<boolean>(false);
+	const [multiWindow, setMultiWindow] = useState<boolean>(false);
+	const [smoothing, setSmoothing] = useState<SmoothingFraction>("none");
 	const [isSaving, setIsSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
@@ -72,10 +87,30 @@ export const SettingsDialog = ({
 		}
 	};
 
+	const handleResolutionModeChange = async (enabled: boolean) => {
+		setMultiWindow(enabled);
+		setError(null);
+		try {
+			await audioApi.setResolutionMode(enabled);
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+		}
+	};
+
+	const handleSmoothingChange = async (fraction: SmoothingFraction) => {
+		setSmoothing(fraction);
+		setError(null);
+		try {
+			await audioApi.setSmoothing(fraction);
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+		}
+	};
+
 	const availableBackends = audioState?.backend_available ?? ["cpal"];
 
 	return (
-		<div className="fixed inset-0 z-50 flex items-center justify-center">
+		<div className="fixed inset-0 z-50 flex items-center justify-center p-4">
 			{/* Backdrop */}
 			<div
 				className="absolute inset-0 bg-black/50 backdrop-blur-sm"
@@ -87,9 +122,12 @@ export const SettingsDialog = ({
 			/>
 
 			{/* Dialog */}
-			<div className="relative glass rounded-lg border border-border shadow-xl w-full max-w-md mx-4">
+			<div
+				data-testid="settings-dialog"
+				className="relative glass rounded-lg border border-border shadow-xl w-full max-w-md flex flex-col max-h-full"
+			>
 				{/* Header */}
-				<div className="flex items-center justify-between p-4 border-b border-border">
+				<div className="flex flex-shrink-0 items-center justify-between p-4 border-b border-border">
 					<h2 className="text-lg font-semibold">Settings</h2>
 					<button
 						type="button"
@@ -115,8 +153,9 @@ export const SettingsDialog = ({
 					</button>
 				</div>
 
-				{/* Content */}
-				<div className="p-4 space-y-6">
+				{/* Content: the only scrolling region, so header and footer stay reachable
+				    however short the display is */}
+				<div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-6">
 					{/* Audio Backend */}
 					<fieldset className="space-y-2">
 						<legend className="text-sm font-medium text-foreground">Audio Backend</legend>
@@ -194,15 +233,20 @@ export const SettingsDialog = ({
 					<fieldset className="space-y-2">
 						<legend className="text-sm font-medium text-foreground">FFT Size</legend>
 						<p className="text-xs text-muted-foreground mb-2">
-							Larger = better frequency resolution, slower updates. Current: {selectedFftSize} bins
-							({audioState ? ((audioState.sample_rate / selectedFftSize) * 1000).toFixed(1) : "?"}{" "}
-							ms window)
+							Larger = better frequency resolution, slower updates. Current:{" "}
+							<span data-testid="fft-size-current">{selectedFftSize}</span>-point window,{" "}
+							{binCount(selectedFftSize)} bins (
+							{audioState
+								? windowLengthMs(selectedFftSize, audioState.sample_rate).toFixed(1)
+								: "?"}{" "}
+							ms)
 						</p>
-						<div className="grid grid-cols-3 gap-2">
+						<div data-testid="fft-size-select" className="grid grid-cols-3 gap-2">
 							{FFT_SIZES.map((size) => (
 								<button
 									type="button"
 									key={size}
+									data-testid={`fft-size-${size}`}
 									onClick={() => handleFftSizeChange(size)}
 									disabled={isSaving}
 									className={`px-3 py-2 text-sm rounded-md border transition-colors ${
@@ -212,6 +256,63 @@ export const SettingsDialog = ({
 									} disabled:opacity-50`}
 								>
 									{size}
+								</button>
+							))}
+						</div>
+					</fieldset>
+
+					{/* Resolution */}
+					<fieldset className="space-y-2">
+						<legend className="text-sm font-medium text-foreground">Resolution</legend>
+						<p className="text-xs text-muted-foreground mb-2">
+							A single FFT cannot serve the whole band. Multi-time-window runs several lengths in
+							parallel and stitches them per octave, so 60 Hz reads as clearly as 6 kHz.
+						</p>
+						<div className="grid grid-cols-2 gap-2">
+							{[
+								{ value: false, label: "Single FFT" },
+								{ value: true, label: "Multi-time-window" },
+							].map((mode) => (
+								<button
+									type="button"
+									key={mode.label}
+									data-testid={mode.value ? "resolution-multi" : "resolution-single"}
+									onClick={() => handleResolutionModeChange(mode.value)}
+									disabled={isSaving}
+									className={`px-3 py-2 text-sm rounded-md border transition-colors ${
+										multiWindow === mode.value
+											? "bg-primary text-primary-foreground border-primary"
+											: "border-border hover:bg-muted"
+									} disabled:opacity-50`}
+								>
+									{mode.label}
+								</button>
+							))}
+						</div>
+					</fieldset>
+
+					{/* Smoothing */}
+					<fieldset className="space-y-2">
+						<legend className="text-sm font-medium text-foreground">Smoothing</legend>
+						<p className="text-xs text-muted-foreground mb-2">
+							Fractional-octave averaging of the multi-time-window trace. Wider settings hide narrow
+							features; narrower settings keep them.
+						</p>
+						<div className="grid grid-cols-4 gap-2">
+							{SMOOTHING_OPTIONS.map((option) => (
+								<button
+									type="button"
+									key={option.value}
+									data-testid={`smoothing-${option.value}`}
+									onClick={() => handleSmoothingChange(option.value)}
+									disabled={isSaving || !multiWindow}
+									className={`px-3 py-2 text-sm rounded-md border transition-colors ${
+										smoothing === option.value
+											? "bg-primary text-primary-foreground border-primary"
+											: "border-border hover:bg-muted"
+									} disabled:opacity-50`}
+								>
+									{option.label}
 								</button>
 							))}
 						</div>
@@ -269,7 +370,7 @@ export const SettingsDialog = ({
 				</div>
 
 				{/* Footer */}
-				<div className="flex justify-end p-4 border-t border-border">
+				<div className="flex flex-shrink-0 justify-end p-4 border-t border-border">
 					<button
 						type="button"
 						onClick={onClose}

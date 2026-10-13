@@ -43,6 +43,7 @@ export const SpectrumAnalyzer = ({
 	isRunning,
 }: SpectrumAnalyzerProps) => {
 	const containerRef = useRef<HTMLDivElement>(null);
+	const plotHostRef = useRef<HTMLDivElement>(null);
 	const chartRef = useRef<uPlot | null>(null);
 	const logFreqsRef = useRef<number[]>([]);
 	const peakHoldRef = useRef<number[]>([]);
@@ -79,7 +80,7 @@ export const SpectrumAnalyzer = ({
 
 		const container = containerRef.current;
 		const width = container.clientWidth || 600;
-		const height = Math.max(container.clientHeight, 280);
+		const height = Math.max(container.clientHeight, 120);
 
 		// Theme-specific colors with high contrast
 		const isDark = theme === "dark";
@@ -164,23 +165,29 @@ export const SpectrumAnalyzer = ({
 			new Array(512).fill(-120),
 		];
 
-		chartRef.current = new uPlot(opts, data, container);
+		const host = plotHostRef.current;
+		if (!host) return;
+		chartRef.current = new uPlot(opts, data, host);
 
 		// Handle resize
+		// Batched into a frame so a burst of resizes coalesces into one setSize,
+		// and guarded so a zero-sized container never produces a degenerate canvas.
+		let resizeFrame = 0;
 		const resizeObserver = new ResizeObserver((entries) => {
-			for (const entry of entries) {
-				if (chartRef.current && entry.contentRect.width > 0) {
-					chartRef.current.setSize({
-						width: entry.contentRect.width,
-						height: Math.max(entry.contentRect.height, 280),
-					});
-				}
-			}
+			const entry = entries[entries.length - 1];
+			if (!entry) return;
+			const { width, height } = entry.contentRect;
+			if (width <= 0 || height <= 0) return;
+			cancelAnimationFrame(resizeFrame);
+			resizeFrame = requestAnimationFrame(() => {
+				chartRef.current?.setSize({ width, height });
+			});
 		});
 
 		resizeObserver.observe(container);
 
 		return () => {
+			cancelAnimationFrame(resizeFrame);
 			resizeObserver.disconnect();
 			chartRef.current?.destroy();
 			chartRef.current = null;
@@ -253,10 +260,15 @@ export const SpectrumAnalyzer = ({
 					)}
 				</div>
 			</div>
-			<div ref={containerRef} className="flex-1 min-h-[280px] relative">
+			<div ref={containerRef} className="relative min-h-0 flex-1 overflow-hidden">
+				{/* uPlot mounts here, out of flow, so the canvas can never resize the
+				    container being observed. */}
+				<div ref={plotHostRef} className="absolute inset-0" />
 				{!isRunning && (
-					<div className="absolute inset-0 flex items-center justify-center text-muted-foreground bg-background/50 z-10">
-						Start audio stream to see spectrum
+					<div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
+						<span className="rounded-md border border-border bg-card px-3 py-1.5 text-sm text-muted-foreground shadow-lg">
+							Start audio stream to see spectrum
+						</span>
 					</div>
 				)}
 			</div>

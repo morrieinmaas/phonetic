@@ -1,7 +1,16 @@
-import { useEffect, useRef, useState } from "react";
+import { save } from "@tauri-apps/plugin-dialog";
+import type { ReactNode } from "react";
+import { useEffect, useState } from "react";
+import { ChannelMatrix } from "./components/channel-matrix";
+import { ChannelSelector } from "./components/channel-selector";
 import { DeviceSelector } from "./components/device-selector";
+import { DiagnosticsBanner } from "./components/diagnostics-banner";
 import { GeneratorControls } from "./components/generator-controls";
+import { LeqPanel } from "./components/leq-panel";
+import type { LeqPanelMetrics } from "./components/leq-panel";
 import { PermissionDialog } from "./components/permission-dialog";
+import { RoomCriteriaPanel } from "./components/room-criteria-panel";
+import { SessionControls } from "./components/session-controls";
 import { SettingsDialog } from "./components/settings-dialog";
 import { SpectrogramDisplay } from "./components/spectrogram-display";
 import { SpectrumAnalyzer } from "./components/spectrum-analyzer";
@@ -9,10 +18,50 @@ import { StatusBar } from "./components/status-bar";
 import { TransferFunctionDisplay } from "./components/transfer-function-display";
 import { ThemeToggle } from "./components/ui/theme-toggle";
 import { WebGLSpectrum } from "./components/webgl-spectrum";
+import { createPollLoop } from "./lib/poll-loop";
+import { audioApi } from "./services/audio-api";
 import { useAudioStore } from "./stores/audio-store";
+import type {
+	DoseResult,
+	NoiseLimit,
+	RcResult,
+	RoomCriteriaFamily,
+	RoomCriteriaResult,
+	Routing,
+} from "./types/audio";
 
 type SpectrumRenderer = "uplot" | "webgl";
-type SecondaryView = "transfer" | "spectrogram";
+type SecondaryView = "transfer" | "spectrogram" | "matrix" | "leq" | "room";
+
+const SECONDARY_VIEWS: readonly SecondaryView[] = [
+	"transfer",
+	"spectrogram",
+	"matrix",
+	"leq",
+	"room",
+];
+
+/** Tab labels, kept beside SECONDARY_VIEWS so a new view cannot ship unlabelled. */
+const SECONDARY_VIEW_LABELS: Record<SecondaryView, string> = {
+	transfer: "Transfer Function",
+	spectrogram: "Spectrogram",
+	matrix: "Channel Matrix",
+
+	leq: "Noise Dose",
+	room: "Room Criteria",
+};
+
+/** How often a completed LEQ interval is appended to the log, in seconds. */
+const LEQ_LOG_INTERVAL_SECONDS = 60;
+
+/**
+ * Validates a value restored from localStorage against the current SecondaryView union.
+ * A stored value survives across app versions; without this check, a value that was valid
+ * before a view was renamed or removed would flow straight into state and leave the app
+ * with no matching content to render.
+ */
+export const isSecondaryView = (value: string | null): value is SecondaryView =>
+	value !== null && (SECONDARY_VIEWS as readonly string[]).includes(value);
 
 export const App = () => {
 	const [theme, setTheme] = useState<"dark" | "light">(() => {
@@ -35,16 +84,31 @@ export const App = () => {
 	const [secondaryView, setSecondaryView] = useState<SecondaryView>(() => {
 		if (typeof window !== "undefined") {
 			const stored = localStorage.getItem("phonetic-secondary-view");
-			if (stored === "transfer" || stored === "spectrogram") return stored;
+			if (isSecondaryView(stored)) return stored;
 		}
 		return "spectrogram";
 	});
 
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [permissionDialogOpen, setPermissionDialogOpen] = useState(false);
+	const [routing, setRoutingState] = useState<Routing>({ pairs: [] });
+	const [isMultiWindow, setIsMultiWindow] = useState(false);
+
+	// LEQ / noise dose state. Polled only while the LEQ view is visible and
+	// the stream is running (see the effect below) -- an un-awaited IPC call
+	// per animation frame is what froze this app before, and there is no
+	// reason to poll a view nobody can see.
+	const [leqMetrics, setLeqMetrics] = useState<LeqPanelMetrics | null>(null);
+	const [leqLimits, setLeqLimits] = useState<NoiseLimit[]>([]);
+	const [selectedLeqLimit, setSelectedLeqLimit] = useState<NoiseLimit | null>(null);
+	const [leqDose, setLeqDose] = useState<DoseResult | null>(null);
+	const [leqLogging, setLeqLogging] = useState(false);
+	const [leqLoggingPath, setLeqLoggingPath] = useState<string | null>(null);
+	const [roomCriteriaFamily, setRoomCriteriaFamily] = useState<RoomCriteriaFamily>("nc");
+	const [roomCriteriaResult, setRoomCriteriaResult] = useState<RoomCriteriaResult | null>(null);
+	const [rcResult, setRcResult] = useState<RcResult | null>(null);
 
 	// Animation frame ref for spectrum polling
-	const animationFrameRef = useRef<number | null>(null);
 
 	// Get store state and actions
 	const {
@@ -60,6 +124,8 @@ export const App = () => {
 		spectrumData,
 		transferFunctionData,
 		fftSize,
+		inputChannelCount,
+		measurementChannel,
 		fetchDevices,
 		fetchAudioState,
 		setSelectedInputDevice,
@@ -76,7 +142,12 @@ export const App = () => {
 		resetAveraging,
 		clearError,
 		setFftSize,
+		setInputChannelCount,
+		setMeasurementChannel,
 	} = useAudioStore();
+
+	const selectedInputAudioDevice =
+		devices?.inputs.find((device) => device.id === selectedInputDevice) ?? null;
 
 	// Initialize on mount
 	useEffect(() => {
@@ -101,29 +172,161 @@ export const App = () => {
 		localStorage.setItem("phonetic-secondary-view", secondaryView);
 	}, [secondaryView]);
 
-	// Spectrum polling loop
+	useEffect(() => {
+		audioApi
+			.getRouting()
+			.then(setRoutingState)
+			.catch(() => setRoutingState({ pairs: [] }));
+	}, []);
+
+	// The noise-limit presets are a small, static list -- fetched once rather
+	// than on every LEQ poll tick. Defaults to the first preset so the panel
+	// has something to compare against as soon as a measurement exists.
+	useEffect(() => {
+		audioApi
+			.listNoiseLimits()
+			.then((limits) => {
+				setLeqLimits(limits);
+				setSelectedLeqLimit((current) => current ?? limits[0] ?? null);
+			})
+			.catch(() => setLeqLimits([]));
+	}, []);
+
+	// LEQ metrics/dose polling loop.
+	//
+	// Gated on the LEQ view actually being visible, on top of the stream
+	// running: the meter keeps integrating in the audio callback regardless,
+	// but there is no reason to poll it -- or repeatedly ask the backend to
+	// recompute dose -- for a view nobody can see. See the spectrum polling
+	// loop below for why each poll must finish before the next is scheduled.
 	useEffect(() => {
 		const isRunning = audioState?.is_running ?? false;
-
-		const pollSpectrumData = () => {
-			if (isRunning) {
-				fetchSpectrum();
-				fetchTransferFunction();
-			}
-			animationFrameRef.current = requestAnimationFrame(pollSpectrumData);
-		};
-
-		if (isRunning) {
-			animationFrameRef.current = requestAnimationFrame(pollSpectrumData);
+		if (secondaryView !== "leq" || !isRunning) {
+			return;
 		}
 
-		return () => {
-			if (animationFrameRef.current !== null) {
-				cancelAnimationFrame(animationFrameRef.current);
-				animationFrameRef.current = null;
-			}
-		};
+		return createPollLoop(
+			async () => {
+				const metrics = await audioApi.getLeqMetrics();
+				setLeqMetrics(metrics);
+				if (selectedLeqLimit) {
+					setLeqDose(await audioApi.computeLeqDose(selectedLeqLimit));
+				}
+			},
+			(callback) => window.setTimeout(callback, 300),
+			(handle) => window.clearTimeout(handle),
+		);
+	}, [secondaryView, audioState?.is_running, selectedLeqLimit]);
+
+	// Multi-window polling loop.
+	//
+	// Whether multi-window is active only needs to be known while the operator
+	// is looking at the matrix — it shares one processor across every pair
+	// (Controller ruling B8), so the matrix must know to show a paused message
+	// rather than silently repeating one trace under every pair's id.
+	useEffect(() => {
+		if (secondaryView !== "matrix") {
+			return;
+		}
+
+		return createPollLoop(
+			async () => {
+				setIsMultiWindow(await audioApi.isMultiWindow());
+			},
+			(callback) => window.setTimeout(callback, 300),
+			(handle) => window.clearTimeout(handle),
+		);
+	}, [secondaryView]);
+
+	const handleRoutingChange = async (next: Routing) => {
+		const previous = routing;
+		setRoutingState(next);
+		try {
+			await audioApi.setRouting(next);
+		} catch (e) {
+			// Rejected (e.g. failed validation) — fall back to what the engine
+			// actually holds rather than leave the UI showing a routing that
+			// was never applied.
+			setRoutingState(previous);
+			console.error("Failed to update routing:", e);
+		}
+	};
+
+	const handleSelectLeqLimit = (id: string) => {
+		setSelectedLeqLimit(leqLimits.find((candidate) => candidate.id === id) ?? null);
+		setLeqDose(null);
+	};
+
+	const handleStartLeqLogging = async () => {
+		const path = await save({ filters: [{ name: "LEQ log", extensions: ["csv"] }] });
+		if (!path) return;
+		try {
+			await audioApi.startLeqLogging(path, LEQ_LOG_INTERVAL_SECONDS);
+			setLeqLogging(true);
+			setLeqLoggingPath(path);
+		} catch (e) {
+			console.error("Failed to start LEQ logging:", e);
+		}
+	};
+
+	const handleStopLeqLogging = async () => {
+		try {
+			await audioApi.stopLeqLogging();
+		} catch (e) {
+			console.error("Failed to stop LEQ logging:", e);
+		} finally {
+			setLeqLogging(false);
+			setLeqLoggingPath(null);
+		}
+	};
+
+	// Spectrum polling loop.
+	//
+	// Each poll must finish before the next is scheduled. Firing these without
+	// awaiting them queues a fresh pair of IPC calls every frame; once the
+	// backend takes longer than the frame budget — which it does as soon as the
+	// generator starts and the audio callback begins real FFT work under the
+	// same lock — the queue grows without bound and the window freezes.
+	useEffect(() => {
+		const isRunning = audioState?.is_running ?? false;
+		if (!isRunning) {
+			return;
+		}
+
+		return createPollLoop(
+			async () => {
+				await Promise.all([fetchSpectrum(), fetchTransferFunction()]);
+			},
+			(callback) => requestAnimationFrame(callback),
+			(handle) => cancelAnimationFrame(handle),
+		);
 	}, [audioState?.is_running, fetchSpectrum, fetchTransferFunction]);
+
+	// Room criteria polling loop.
+	//
+	// A rating only needs to refresh a few times a second, not once a frame, and
+	// only while the operator is actually looking at this view — polling a
+	// hidden panel just stacks up IPC round-trips nobody reads.
+	useEffect(() => {
+		const isRunning = audioState?.is_running ?? false;
+		if (secondaryView !== "room" || !isRunning) {
+			return;
+		}
+
+		return createPollLoop(
+			async () => {
+				if (roomCriteriaFamily === "rc") {
+					const result = await audioApi.getRcRating();
+					setRcResult(result);
+				} else {
+					const result = await audioApi.getRoomCriteria(roomCriteriaFamily);
+					setRoomCriteriaResult(result);
+				}
+			},
+			(callback) => window.setTimeout(callback, 300),
+			(handle) => window.clearTimeout(handle),
+		);
+	}, [secondaryView, audioState?.is_running, roomCriteriaFamily]);
 
 	const toggleTheme = () => {
 		setTheme((prev) => (prev === "dark" ? "light" : "dark"));
@@ -169,14 +372,64 @@ export const App = () => {
 	const isRunning = audioState?.is_running ?? false;
 	const generatorActive = audioState?.generator_active ?? false;
 
+	const secondaryViewContent: Record<SecondaryView, ReactNode> = {
+		transfer: (
+			<TransferFunctionDisplay
+				data={transferFunctionData}
+				isRunning={isRunning}
+				onResetAveraging={resetAveraging}
+				sampleRate={audioState?.sample_rate ?? 48000}
+			/>
+		),
+		spectrogram: (
+			<SpectrogramDisplay
+				spectrumData={spectrumData}
+				sampleRate={audioState?.sample_rate ?? 48000}
+				fftSize={fftSize}
+				isRunning={isRunning}
+			/>
+		),
+		matrix: (
+			<ChannelMatrix
+				routing={routing}
+				channelCount={inputChannelCount}
+				onChange={handleRoutingChange}
+				isMultiWindow={isMultiWindow}
+			/>
+		),
+		leq: (
+			<LeqPanel
+				metrics={leqMetrics}
+				limit={selectedLeqLimit}
+				dose={leqDose}
+				availableLimits={leqLimits}
+				onSelectLimit={handleSelectLeqLimit}
+				isLogging={leqLogging}
+				loggingPath={leqLoggingPath}
+				onStartLogging={handleStartLeqLogging}
+				onStopLogging={handleStopLeqLogging}
+			/>
+		),
+		room: (
+			<RoomCriteriaPanel
+				family={roomCriteriaFamily}
+				result={roomCriteriaResult}
+				rcResult={rcResult}
+				onFamilyChange={setRoomCriteriaFamily}
+			/>
+		),
+	};
+
 	return (
-		<div className="flex min-h-screen flex-col bg-background text-foreground">
+		<div className="flex h-screen overflow-hidden flex-col bg-background text-foreground">
 			{/* Header */}
 			<header className="glass sticky top-0 z-50 flex h-14 items-center justify-between border-b px-4">
 				<h1 className="gradient-text text-xl font-bold tracking-tight">Phonetic</h1>
 				<div className="flex items-center gap-2">
+					<SessionControls />
 					<button
 						type="button"
+						data-testid="settings-open"
 						onClick={() => setSettingsOpen(true)}
 						className="p-2 rounded-md hover:bg-muted transition-colors"
 						aria-label="Open settings"
@@ -201,6 +454,19 @@ export const App = () => {
 				</div>
 			</header>
 
+			{/* Rig diagnoses sit above the measurement area: they appear and vanish
+			    on a poll, and below the status bar they shoved the footer around. */}
+			{/* Notifications float over the interface rather than displacing it.
+			    aria-live announces them without stealing focus. */}
+			<div
+				aria-live="polite"
+				className="pointer-events-none fixed right-4 top-16 z-40 flex w-full max-w-sm flex-col gap-2"
+			>
+				<div className="pointer-events-auto contents">
+					<DiagnosticsBanner />
+				</div>
+			</div>
+
 			{/* Main content */}
 			<main className="flex flex-1 gap-4 p-4 min-h-0">
 				{/* Sidebar - Device & Generator controls */}
@@ -215,6 +481,7 @@ export const App = () => {
 							<>
 								<DeviceSelector
 									label="Input"
+									testId="input-device-select"
 									devices={devices.inputs}
 									selectedDeviceId={selectedInputDevice}
 									defaultDeviceId={devices.default_input}
@@ -228,6 +495,15 @@ export const App = () => {
 									selectedDeviceId={selectedOutputDevice}
 									defaultDeviceId={devices.default_output}
 									onSelect={setSelectedOutputDevice}
+									disabled={isRunning}
+								/>
+
+								<ChannelSelector
+									inputDevice={selectedInputAudioDevice}
+									channelCount={inputChannelCount}
+									measurementChannel={measurementChannel}
+									onChannelCountChange={setInputChannelCount}
+									onMeasurementChannelChange={setMeasurementChannel}
 									disabled={isRunning}
 								/>
 
@@ -284,9 +560,9 @@ export const App = () => {
 				</aside>
 
 				{/* Main visualization area */}
-				<div className="flex flex-1 flex-col gap-4 min-h-0">
+				<div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
 					{/* Spectrum analyzer - takes slightly more space */}
-					<div className="glass rounded-lg p-4 flex-[1.2] min-h-[350px] flex flex-col">
+					<div className="glass flex min-h-[360px] flex-[1.2] flex-col rounded-lg p-4">
 						{/* Renderer toggle */}
 						<div className="flex items-center justify-end gap-2 mb-2 flex-shrink-0">
 							<span className="text-xs text-muted-foreground">Renderer:</span>
@@ -336,52 +612,33 @@ export const App = () => {
 					</div>
 
 					{/* Secondary view - Transfer function or Spectrogram */}
-					<div className="glass rounded-lg p-4 flex-1 min-h-[300px] flex flex-col">
+					<div className="glass flex min-h-[420px] flex-1 flex-col rounded-lg p-4">
 						{/* View toggle */}
-						<div className="flex items-center justify-end gap-2 mb-2 flex-shrink-0">
+						{/* View toggle. Wraps rather than clipping: five labelled tabs
+						    overflow a narrow window, and the old segmented control had
+						    overflow-hidden, so tabs past the edge simply vanished. */}
+						<div className="mb-2 flex flex-shrink-0 flex-wrap items-center justify-end gap-2">
 							<span className="text-xs text-muted-foreground">View:</span>
-							<div className="flex rounded-md border border-border overflow-hidden">
-								<button
-									type="button"
-									onClick={() => setSecondaryView("transfer")}
-									className={`px-2 py-1 text-xs transition-colors ${
-										secondaryView === "transfer"
-											? "bg-primary text-primary-foreground"
-											: "bg-transparent text-muted-foreground hover:bg-muted"
-									}`}
-								>
-									Transfer Function
-								</button>
-								<button
-									type="button"
-									onClick={() => setSecondaryView("spectrogram")}
-									className={`px-2 py-1 text-xs transition-colors ${
-										secondaryView === "spectrogram"
-											? "bg-primary text-primary-foreground"
-											: "bg-transparent text-muted-foreground hover:bg-muted"
-									}`}
-								>
-									Spectrogram
-								</button>
+							<div className="flex flex-wrap gap-0.5 rounded-md border border-border p-0.5">
+								{SECONDARY_VIEWS.map((view) => (
+									<button
+										key={view}
+										type="button"
+										onClick={() => setSecondaryView(view)}
+										aria-pressed={secondaryView === view}
+										className={`whitespace-nowrap rounded px-2 py-1 text-xs transition-colors ${
+											secondaryView === view
+												? "bg-primary text-primary-foreground"
+												: "bg-transparent text-muted-foreground hover:bg-muted"
+										}`}
+									>
+										{SECONDARY_VIEW_LABELS[view]}
+									</button>
+								))}
 							</div>
 						</div>
 						{/* View content */}
-						<div className="flex-1 min-h-0">
-							{secondaryView === "transfer" ? (
-								<TransferFunctionDisplay
-									data={transferFunctionData}
-									isRunning={isRunning}
-									onResetAveraging={resetAveraging}
-								/>
-							) : (
-								<SpectrogramDisplay
-									spectrumData={spectrumData}
-									sampleRate={audioState?.sample_rate ?? 48000}
-									fftSize={fftSize}
-									isRunning={isRunning}
-								/>
-							)}
-						</div>
+						<div className="flex-1 min-h-0">{secondaryViewContent[secondaryView]}</div>
 					</div>
 				</div>
 			</main>

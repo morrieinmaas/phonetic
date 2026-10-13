@@ -19,15 +19,21 @@ default:
 # Setup & Dependencies
 # ============================================================================
 
-# Install system dependencies (macOS)
-install-deps-macos:
+# Install Linux build packages for Tauri and ALSA (Debian/Ubuntu)
+install-deps-linux:
+    sudo apt-get update
+    sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+        libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev xdg-utils
+
+# Install Rust and Bun if missing (macOS and Linux)
+install-deps:
     @echo "Checking system dependencies..."
     @command -v rustc >/dev/null 2>&1 || (echo "Installing Rust..." && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y)
     @command -v bun >/dev/null 2>&1 || (echo "Installing Bun..." && curl -fsSL https://bun.sh/install | bash)
     @echo "System dependencies OK"
 
 # Install project dependencies (JS + Rust)
-install: install-deps-macos
+install: install-deps
     bun install
     cd {{tauri}} && cargo fetch
 
@@ -129,8 +135,41 @@ test-ts:
 test-rust:
     cd {{tauri}} && cargo test
 
+# Run just the measurement accuracy suite (see README's Measurement Accuracy section)
+test-accuracy:
+    cd {{tauri}} && cargo test --test dsp_accuracy -- --nocapture
+
+# Run the channel matrix tests (Rust + TS)
+test-matrix:
+    cd {{tauri}} && cargo test routing
+    cd {{tauri}} && cargo test --lib audio::engine
+    cd {{desktop}} && bun test src/components/channel-matrix.test.tsx
+
+# Sustained-load test for 32 pairs (release build, ~1 min)
+soak-matrix:
+    cd {{tauri}} && cargo test --test matrix_soak --release -- --nocapture
+
+# Run the LEQ tests (Rust + TS)
+test-leq:
+    cargo test --manifest-path {{tauri}}/Cargo.toml leq
+    cargo test --manifest-path {{tauri}}/Cargo.toml noise_limits
+    cd {{desktop}} && bun test src/components/leq-panel.test.tsx
+
+# Run the room criteria tests (Rust + TS)
+test-room-criteria:
+    cargo test --manifest-path {{tauri}}/Cargo.toml room_criteria
+    cd {{desktop}} && bun test src/components/room-criteria-panel.test.tsx
+
 # Run all tests
 test: test-ts test-rust
+
+# Generate WAV test fixtures used by the e2e suite
+fixtures:
+    cd apps/desktop/src-tauri && cargo test --test audio_file_roundtrip -- --nocapture
+
+# Write an example session file to /tmp for inspection
+session-example:
+    cd apps/desktop/src-tauri && cargo test --test session_roundtrip session_file_is_human_readable -- --nocapture
 
 # Run Rust tests with coverage (requires cargo-tarpaulin)
 test-rust-coverage:
@@ -140,38 +179,26 @@ test-rust-coverage:
 test-ts-coverage:
     bun test --coverage || echo "No TypeScript tests found"
 
+# Run the end-to-end suite (requires a release build)
+test-e2e: build-release
+    cd apps/desktop && bun run test:e2e
+
+# Everything: unit, integration, accuracy, e2e
+test-all: test test-accuracy test-e2e
+
 # ============================================================================
 # Distribution
 # ============================================================================
 
-# Build macOS app bundle (.app)
-dist-app: build-frontend
+# Build the installers for this OS: ad-hoc signed .app + .dmg on macOS,
+# .deb + .rpm + .AppImage on Linux (see bundle.targets in tauri.conf.json)
+dist: build-frontend
     cd {{desktop}} && bunx tauri build
-
-# Build macOS disk image (.dmg) from the .app bundle
-dist-dmg: dist-app
-    #!/usr/bin/env zsh
-    set -euo pipefail
-    APP="{{tauri}}/target/release/bundle/macos/Phonetic.app"
-    VERSION=$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")
-    ARCH=$(uname -m)
-    DMG_DIR="{{tauri}}/target/release/bundle/dmg"
-    DMG="$DMG_DIR/Phonetic_${VERSION}_${ARCH}.dmg"
-    mkdir -p "$DMG_DIR"
-    rm -f "$DMG"
-    echo "Ad-hoc signing $APP..."
-    codesign --force --deep --sign - "$APP"
-    codesign --verify "$APP" && echo "Signature valid"
-    echo "Creating DMG from $APP..."
-    hdiutil create -volname "Phonetic" -srcfolder "$APP" -ov -format UDZO "$DMG"
-    xattr -cr "$DMG"
-    echo "DMG ready: $DMG ($(du -h "$DMG" | cut -f1))"
 
 # Show built artifacts
 dist-show:
     @echo "Built artifacts:"
-    @ls -lh {{tauri}}/target/release/bundle/macos/*.app 2>/dev/null || echo "No .app builds."
-    @ls -lh {{tauri}}/target/release/bundle/dmg/*.dmg 2>/dev/null || echo "No .dmg builds."
+    @ls -lh {{tauri}}/target/release/bundle/*/* 2>/dev/null || echo "No bundles built yet. Run: just dist"
 
 # ============================================================================
 # CI Pipeline (used by GitHub Actions)
@@ -202,7 +229,7 @@ ci: ci-install ci-check ci-test ci-build
 # ============================================================================
 
 # Full release: check, test, build
-release: check test dist-dmg
+release: check test dist
     @echo "Release build complete!"
     just dist-show
 
@@ -251,5 +278,18 @@ status:
 
 # Create a new release tag
 tag version:
+    @grep -q "\"version\": \"{{version}}\"" {{tauri}}/tauri.conf.json || { echo "tauri.conf.json is not at {{version}}; bump Cargo.toml, tauri.conf.json and apps/desktop/package.json first"; exit 1; }
     git tag -a v{{version}} -m "Release v{{version}}"
     git push origin v{{version}}
+
+# ============================================================================
+# Headless CLI
+# ============================================================================
+
+# Run the headless CLI (e.g. `just cli selftest`)
+cli *ARGS:
+    cd {{tauri}} && cargo run --bin phonetic-cli -- {{ARGS}}
+
+# Build the CLI in release mode
+cli-release:
+    cd {{tauri}} && cargo build --release --bin phonetic-cli

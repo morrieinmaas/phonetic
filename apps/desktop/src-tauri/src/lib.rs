@@ -1,6 +1,8 @@
-mod audio;
+pub mod audio;
+pub mod cli;
 mod commands;
 pub mod dsp;
+pub mod session;
 
 use tauri::Manager;
 
@@ -11,6 +13,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             log::info!("Phonetic setup starting...");
             println!("Phonetic setup starting...");
@@ -42,6 +45,19 @@ pub fn run() {
             commands::get_transfer_function_data,
             commands::reset_averaging,
             commands::set_fft_size,
+            commands::set_transfer_function_delay,
+            commands::get_transfer_function_delay,
+            commands::set_max_averages,
+            commands::set_resolution_mode,
+            commands::is_multi_window,
+            commands::set_smoothing,
+            commands::get_diagnostics,
+            commands::set_input_channel_count,
+            commands::set_measurement_channel,
+            commands::get_routing,
+            commands::set_routing,
+            commands::get_pair_transfer_function,
+            commands::average_traces,
             // Delay finder commands
             commands::find_delay,
             commands::set_delay_finder_max_delay,
@@ -62,6 +78,9 @@ pub fn run() {
             commands::dbfs_to_spl,
             commands::calibrate_with_reference,
             commands::get_calibration_info,
+            // Room criteria commands
+            commands::get_room_criteria,
+            commands::get_rc_rating,
             // Export commands
             commands::export_transfer_function,
             commands::export_impulse_response,
@@ -69,6 +88,19 @@ pub fn run() {
             commands::get_available_reference_curves,
             commands::get_reference_curve,
             commands::get_reference_curve_at_frequencies,
+            // Offline WAV file analysis
+            commands::measure_wav_file,
+            // Virtual EQ commands
+            commands::predict_eq,
+            // Session save/load commands
+            commands::save_session,
+            commands::load_session,
+            // LEQ commands
+            commands::get_leq_metrics,
+            commands::list_noise_limits,
+            commands::compute_leq_dose,
+            commands::start_leq_logging,
+            commands::stop_leq_logging,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

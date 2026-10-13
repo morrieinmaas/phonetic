@@ -1,14 +1,28 @@
+import type { MouseEvent as ReactMouseEvent } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import { useShallow } from "zustand/shallow";
+import { interpolatePhaseToLogScale } from "../lib/phase-interpolation";
+import {
+	type CursorSample,
+	applyPan,
+	applyZoom,
+	nearestIndex,
+	pixelToLogFrequency,
+} from "../lib/plot-scales";
+import { audioApi } from "../services/audio-api";
+import { useEqStore } from "../stores/eq-store";
 import { useTraceStore } from "../stores/trace-store";
 import type {
+	BiquadFilter,
 	ReferenceCurve,
 	ReferenceCurveType,
 	StoredTrace,
 	TransferFunctionData,
 } from "../types/audio";
+import { CursorReadout } from "./cursor-readout";
+import { EqControls } from "./eq-controls";
 import { ReferenceCurveSelector } from "./reference-curve-selector";
 import { TraceControls } from "./trace-controls";
 
@@ -16,10 +30,24 @@ interface TransferFunctionDisplayProps {
 	data: TransferFunctionData | null;
 	isRunning: boolean;
 	onResetAveraging: () => void;
+	/** Sample rate the virtual EQ's filter coefficients are computed against. */
+	sampleRate: number;
 }
 
 /** Maximum number of stored traces that can be displayed simultaneously */
 const MAX_DISPLAYED_TRACES = 4;
+
+/** Full frequency range of the plot, and the limit that zoom/pan gestures cannot cross. */
+const FREQ_LIMITS: [number, number] = [20, 20000];
+
+const CURSOR_A_COLOR = "#f59e0b";
+const CURSOR_B_COLOR = "#d946ef";
+
+/** How often the virtual-EQ prediction may be recomputed, in milliseconds.
+    A predicted curve is a reference overlay, not the live trace; recomputing
+    it per measurement frame cost an IPC round trip of the whole transfer
+    function each time. */
+const EQ_PREDICTION_INTERVAL_MS = 250;
 
 // Map to log frequency scale for display
 const mapToLogScale = (
@@ -87,10 +115,19 @@ export const TransferFunctionDisplay = ({
 	data,
 	isRunning,
 	onResetAveraging,
+	sampleRate,
 }: TransferFunctionDisplayProps) => {
 	const containerRef = useRef<HTMLDivElement>(null);
+	const plotHostRef = useRef<HTMLDivElement>(null);
 	const chartRef = useRef<uPlot | null>(null);
 	const logFreqsRef = useRef<number[]>([]);
+	const xRangeRef = useRef<[number, number]>(FREQ_LIMITS);
+	const cursorsRef = useRef<{ a: CursorSample | null; b: CursorSample | null }>({
+		a: null,
+		b: null,
+	});
+	const [cursorA, setCursorA] = useState<CursorSample | null>(null);
+	const [cursorB, setCursorB] = useState<CursorSample | null>(null);
 	const [autoZoom, setAutoZoom] = useState(true);
 	const [theme, setTheme] = useState<"dark" | "light">(() =>
 		document.documentElement.classList.contains("dark") ? "dark" : "light",
@@ -103,6 +140,59 @@ export const TransferFunctionDisplay = ({
 	const visibleTraces = useTraceStore(
 		useShallow((state) => state.traces.filter((t) => t.visible).slice(0, MAX_DISPLAYED_TRACES)),
 	);
+
+	// Virtual EQ: predict the effect of the enabled filter bank on the live measurement,
+	// or on the first visible stored trace when nothing is running.
+	const enabledEqFilters = useEqStore(
+		useShallow((state) => state.filters.filter((f) => f.enabled)),
+	);
+	const eqBypassed = useEqStore((state) => state.bypassed);
+	const [predictedData, setPredictedData] = useState<TransferFunctionData | null>(null);
+	const lastEqPredictionRef = useRef(0);
+	const eqSourceData = data ?? visibleTraces[0]?.data ?? null;
+	const eqActive = !eqBypassed && enabledEqFilters.length > 0 && eqSourceData !== null;
+
+	// The EQ prediction is an overlay on a live trace, so eqSourceData changes on
+	// every measurement poll. Running it per frame meant an IPC round trip
+	// serialising the whole transfer function both ways, sixty times a second,
+	// each one contending for the processor lock — enough to stall the app
+	// whenever a filter was enabled. An operator cannot read a predicted curve
+	// faster than a few updates a second, so it is throttled to that.
+	useEffect(() => {
+		if (!eqActive || !eqSourceData) {
+			setPredictedData(null);
+			return;
+		}
+
+		let cancelled = false;
+		const filterBank: BiquadFilter[] = enabledEqFilters.map((f) => ({
+			filter_type: f.filter_type,
+			frequency_hz: f.frequency_hz,
+			gain_db: f.gain_db,
+			q: f.q,
+			enabled: f.enabled,
+		}));
+
+		const sinceLast = Date.now() - lastEqPredictionRef.current;
+		const delay = Math.max(0, EQ_PREDICTION_INTERVAL_MS - sinceLast);
+
+		const timer = setTimeout(() => {
+			lastEqPredictionRef.current = Date.now();
+			audioApi
+				.predictEq(eqSourceData, filterBank, sampleRate)
+				.then((result) => {
+					if (!cancelled) setPredictedData(result);
+				})
+				.catch(() => {
+					if (!cancelled) setPredictedData(null);
+				});
+		}, delay);
+
+		return () => {
+			cancelled = true;
+			clearTimeout(timer);
+		};
+	}, [eqActive, eqSourceData, enabledEqFilters, sampleRate]);
 
 	// Watch for theme changes
 	useEffect(() => {
@@ -124,7 +214,8 @@ export const TransferFunctionDisplay = ({
 
 		const container = containerRef.current;
 		const width = container.clientWidth || 600;
-		const height = Math.max(container.clientHeight, 250);
+		// Follow the container. A floor here would draw past the panel edge.
+		const height = Math.max(container.clientHeight, 120);
 
 		// Theme-specific colors with high contrast
 		const isDark = theme === "dark";
@@ -155,6 +246,13 @@ export const TransferFunctionDisplay = ({
 				scale: "magnitude",
 				dash: [6, 3],
 			},
+			{
+				label: "Predicted (EQ)",
+				stroke: isDark ? "oklch(0.75 0.18 30)" : "oklch(0.55 0.2 30)",
+				width: 2,
+				scale: "magnitude",
+				dash: [2, 3],
+			},
 		];
 
 		// Add series for stored traces (pre-allocate slots for smooth updates)
@@ -181,10 +279,10 @@ export const TransferFunctionDisplay = ({
 			scales: {
 				x: {
 					time: false,
-					distr: 2,
+					distr: 3,
 					log: 10,
-					min: 20,
-					max: 20000,
+					min: xRangeRef.current[0],
+					max: xRangeRef.current[1],
 				},
 				magnitude: {
 					auto: false,
@@ -215,32 +313,60 @@ export const TransferFunctionDisplay = ({
 				},
 				{
 					label: "Magnitude (dB)",
-					labelSize: 20,
+					labelSize: 22,
 					labelFont: "bold 13px system-ui, sans-serif",
 					font: "bold 12px system-ui, sans-serif",
 					stroke: labelColor,
 					grid: { stroke: gridColor, width: 1 },
 					ticks: { stroke: tickColor, width: 1, size: 6 },
-					size: 55,
+					// Gutter must hold the rotated title (22), a four-glyph value
+					// like -120 at bold 12px (~34), the gap (8) and the tick (6).
+					// At 55 the title was clipped to "agnitude".
+					size: 72,
 					gap: 8,
 					scale: "magnitude",
+					splits: [-40, -30, -20, -10, 0, 10, 20],
 				},
 				{
 					side: 1,
 					label: "Phase (°)",
-					labelSize: 20,
+					labelSize: 22,
 					labelFont: "bold 13px system-ui, sans-serif",
 					font: "bold 12px system-ui, sans-serif",
 					stroke: labelColor,
 					grid: { show: false },
 					ticks: { stroke: tickColor, width: 1, size: 6 },
-					size: 55,
+					size: 72,
 					gap: 8,
 					scale: "phase",
 					splits: [-180, -90, 0, 90, 180],
 				},
 			],
 			series,
+			hooks: {
+				draw: [
+					(u) => {
+						const drawCursorLine = (sample: CursorSample | null, color: string) => {
+							if (!sample) return;
+							const x = u.valToPos(sample.frequencyHz, "x", true);
+							if (x < u.bbox.left || x > u.bbox.left + u.bbox.width) return;
+
+							u.ctx.save();
+							u.ctx.strokeStyle = color;
+							u.ctx.lineWidth = 1;
+							u.ctx.setLineDash([4, 3]);
+							u.ctx.beginPath();
+							u.ctx.moveTo(x, u.bbox.top);
+							u.ctx.lineTo(x, u.bbox.top + u.bbox.height);
+							u.ctx.stroke();
+							u.ctx.restore();
+						};
+
+						drawCursorLine(cursorsRef.current.a, CURSOR_A_COLOR);
+						drawCursorLine(cursorsRef.current.b, CURSOR_B_COLOR);
+					},
+				],
+			},
 		};
 
 		// Build initial data array
@@ -250,6 +376,7 @@ export const TransferFunctionDisplay = ({
 			new Array(numPoints).fill(0), // Magnitude
 			new Array(numPoints).fill(0), // Phase
 			new Array(numPoints).fill(null), // Reference curve
+			new Array(numPoints).fill(null), // Predicted (EQ)
 		];
 
 		// Add empty arrays for trace slots
@@ -257,28 +384,102 @@ export const TransferFunctionDisplay = ({
 			chartData.push(new Array(numPoints).fill(null));
 		}
 
-		chartRef.current = new uPlot(opts, chartData, container);
+		const host = plotHostRef.current;
+		if (!host) return;
+		chartRef.current = new uPlot(opts, chartData, host);
 
 		// Handle resize
+		// Batched into a frame so a burst of resizes coalesces into one setSize,
+		// and guarded so a zero-sized container (hidden tab, collapsed panel)
+		// never produces a degenerate canvas.
+		let resizeFrame = 0;
 		const resizeObserver = new ResizeObserver((entries) => {
-			for (const entry of entries) {
-				if (chartRef.current && entry.contentRect.width > 0) {
-					chartRef.current.setSize({
-						width: entry.contentRect.width,
-						height: Math.max(entry.contentRect.height, 250),
-					});
-				}
-			}
+			const entry = entries[entries.length - 1];
+			if (!entry) return;
+			const { width, height } = entry.contentRect;
+			if (width <= 0 || height <= 0) return;
+			cancelAnimationFrame(resizeFrame);
+			resizeFrame = requestAnimationFrame(() => {
+				chartRef.current?.setSize({ width, height });
+			});
 		});
 
 		resizeObserver.observe(container);
 
 		return () => {
+			cancelAnimationFrame(resizeFrame);
 			resizeObserver.disconnect();
 			chartRef.current?.destroy();
 			chartRef.current = null;
 		};
 	}, [theme, visibleTraces]);
+
+	// Keep the cursor draw hook's ref in sync and trigger a redraw without rebuilding the chart.
+	useEffect(() => {
+		cursorsRef.current = { a: cursorA, b: cursorB };
+		chartRef.current?.redraw();
+	}, [cursorA, cursorB]);
+
+	// Trackpad gestures: ctrl+wheel pinch zooms about the pointer, plain wheel pans.
+	useEffect(() => {
+		const container = containerRef.current;
+		if (!container) return;
+
+		const handleWheel = (event: WheelEvent) => {
+			if (!chartRef.current) return;
+			event.preventDefault();
+
+			const rect = container.getBoundingClientRect();
+			const width = rect.width || 1;
+			const pointerX = event.clientX - rect.left;
+			const [lo, hi] = xRangeRef.current;
+			const anchor = pixelToLogFrequency(pointerX, width, lo, hi);
+
+			xRangeRef.current = event.ctrlKey
+				? applyZoom(xRangeRef.current, Math.exp(event.deltaY * 0.01), anchor, FREQ_LIMITS)
+				: applyPan(xRangeRef.current, (event.deltaX || event.deltaY) / width, FREQ_LIMITS);
+
+			chartRef.current.setScale("x", { min: xRangeRef.current[0], max: xRangeRef.current[1] });
+		};
+
+		container.addEventListener("wheel", handleWheel, { passive: false });
+		return () => container.removeEventListener("wheel", handleWheel);
+	}, []);
+
+	// Place cursor A on click, cursor B on shift-click, by sampling the nearest measured point.
+	const handlePlotClick = useCallback(
+		(event: ReactMouseEvent<HTMLDivElement>) => {
+			if (!data || !isRunning || !containerRef.current) return;
+
+			const rect = containerRef.current.getBoundingClientRect();
+			const width = rect.width || 1;
+			const x = event.clientX - rect.left;
+			const [lo, hi] = xRangeRef.current;
+			const freq = pixelToLogFrequency(x, width, lo, hi);
+
+			const idx = nearestIndex(data.frequencies, freq);
+			if (idx === -1) return;
+
+			const sample: CursorSample = {
+				frequencyHz: data.frequencies[idx] ?? freq,
+				magnitudeDb: data.magnitude_db[idx] ?? 0,
+				groupDelayMs: data.group_delay_ms[idx] ?? 0,
+			};
+
+			if (event.shiftKey) {
+				setCursorB(sample);
+			} else {
+				setCursorA(sample);
+			}
+		},
+		[data, isRunning],
+	);
+
+	// Double-click resets the plot back to the full frequency range.
+	const handleResetZoom = useCallback(() => {
+		xRangeRef.current = FREQ_LIMITS;
+		chartRef.current?.setScale("x", { min: FREQ_LIMITS[0], max: FREQ_LIMITS[1] });
+	}, []);
 
 	// Map reference curve to log frequency scale
 	const getRefCurveValues = useCallback((): (number | null)[] => {
@@ -324,9 +525,13 @@ export const TransferFunctionDisplay = ({
 				: new Array(numPoints).fill(null);
 		const logPhase =
 			data && isRunning
-				? mapToLogScale(data.phase_deg, data.frequencies, logFreqs)
+				? interpolatePhaseToLogScale(data.phase_deg, data.frequencies, logFreqs, mapToLogScale)
 				: new Array(numPoints).fill(null);
 		const refCurveValues = getRefCurveValues();
+		const predictedValues =
+			eqActive && predictedData
+				? mapToLogScale(predictedData.magnitude_db, predictedData.frequencies, logFreqs)
+				: new Array(numPoints).fill(null);
 
 		// Build chart data array
 		const chartData: uPlot.AlignedData = [
@@ -334,6 +539,7 @@ export const TransferFunctionDisplay = ({
 			logMagnitude,
 			logPhase,
 			refCurveValues,
+			predictedValues,
 		];
 
 		// Add trace data
@@ -349,6 +555,7 @@ export const TransferFunctionDisplay = ({
 				// Combine all visible magnitude data for scale calculation
 				const allMagnitudes = [
 					...(data && isRunning ? logMagnitude : []),
+					...predictedValues,
 					...visibleTraces.flatMap((t) => getTraceValues(t)),
 				].filter((v): v is number => v !== null);
 
@@ -365,7 +572,16 @@ export const TransferFunctionDisplay = ({
 		}
 
 		chartRef.current.setData(chartData);
-	}, [data, isRunning, autoZoom, getRefCurveValues, getTraceValues, visibleTraces]);
+	}, [
+		data,
+		isRunning,
+		autoZoom,
+		getRefCurveValues,
+		getTraceValues,
+		visibleTraces,
+		eqActive,
+		predictedData,
+	]);
 
 	useEffect(() => {
 		updateChart();
@@ -378,12 +594,13 @@ export const TransferFunctionDisplay = ({
 			: 0;
 
 	return (
-		<div className="flex flex-col h-full min-h-0">
-			<div className="flex items-center justify-between mb-2 flex-shrink-0 flex-wrap gap-2">
+		<div className="flex h-full min-h-0 flex-col gap-2">
+			{/* Identity and live measurement quality */}
+			<div className="flex flex-shrink-0 items-center justify-between gap-3">
 				<h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
 					Transfer Function
 				</h2>
-				<div className="flex items-center gap-3 flex-wrap">
+				<div className="flex items-center gap-3">
 					{isRunning && data && (
 						<div className="flex items-center gap-2">
 							<span className="text-xs text-muted-foreground">Coherence:</span>
@@ -402,7 +619,14 @@ export const TransferFunctionDisplay = ({
 							</div>
 						</div>
 					)}
-					<TraceControls currentData={data} isRunning={isRunning} />
+				</div>
+			</div>
+
+			{/* Control bar: capture and trace actions on the left, view options on
+			    the right, so the two kinds of control stay visually distinct. */}
+			<div className="flex flex-shrink-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-border/60 bg-muted/30 px-2 py-1.5">
+				<TraceControls currentData={data} isRunning={isRunning} />
+				<div className="ml-auto flex items-center gap-2">
 					<ReferenceCurveSelector
 						selectedCurve={selectedRefCurve}
 						onCurveChange={setSelectedRefCurve}
@@ -411,6 +635,7 @@ export const TransferFunctionDisplay = ({
 					/>
 					<button
 						type="button"
+						aria-pressed={autoZoom}
 						onClick={() => setAutoZoom(!autoZoom)}
 						className={`px-2 py-1 text-xs rounded border transition-colors ${
 							autoZoom
@@ -430,12 +655,39 @@ export const TransferFunctionDisplay = ({
 					</button>
 				</div>
 			</div>
-			<div ref={containerRef} className="flex-1 min-h-[220px] relative">
+			<details className="flex-shrink-0 rounded-md border border-border/60 bg-muted/20">
+				<summary className="cursor-pointer select-none px-2 py-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground marker:text-muted-foreground">
+					Virtual EQ
+					{eqActive && <span className="ml-2 normal-case text-primary">· predicting</span>}
+				</summary>
+				<div className="border-t border-border/60 p-2">
+					<EqControls />
+				</div>
+			</details>
+			{/* biome-ignore lint/a11y/useKeyWithClickEvents: pointer-only cursor placement on a continuous log-frequency plot has no meaningful keyboard equivalent */}
+			<div
+				ref={containerRef}
+				data-testid="transfer-function-plot"
+				className="relative min-h-0 flex-1 overflow-hidden"
+				onClick={handlePlotClick}
+				onDoubleClick={handleResetZoom}
+			>
+				{/* uPlot mounts here, out of flow, so the canvas can never change the
+				    size of the container being observed. In flow the two fed each
+				    other: canvas resize -> container content height changes ->
+				    ResizeObserver fires -> canvas resize. That loop thrashed layout
+				    and pushed the chart past the panel edge. */}
+				<div ref={plotHostRef} className="absolute inset-0" />
 				{!isRunning && visibleTraces.length === 0 && (
-					<div className="absolute inset-0 flex items-center justify-center text-muted-foreground bg-background/50 z-10">
-						Start audio stream and generator to measure transfer function
+					<div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
+						<span className="rounded-md border border-border bg-card px-3 py-1.5 text-sm text-muted-foreground shadow-lg">
+							Start audio stream and generator to measure transfer function
+						</span>
 					</div>
 				)}
+			</div>
+			<div className="mt-2 flex-shrink-0">
+				<CursorReadout cursorA={cursorA} cursorB={cursorB} />
 			</div>
 			<div className="flex gap-4 mt-2 text-xs text-muted-foreground flex-shrink-0 flex-wrap">
 				<span className="flex items-center gap-1">
@@ -456,6 +708,15 @@ export const TransferFunctionDisplay = ({
 							style={{ borderTopWidth: 1 }}
 						/>
 						{refCurveData.name}
+					</span>
+				)}
+				{eqActive && predictedData && (
+					<span className="flex items-center gap-1">
+						<span
+							className="w-4 h-0.5 bg-[oklch(0.55_0.2_30)] border-dashed"
+							style={{ borderTopWidth: 1 }}
+						/>
+						Predicted (EQ)
 					</span>
 				)}
 				{visibleTraces.map((trace) => (

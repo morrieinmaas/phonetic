@@ -3,10 +3,21 @@ import type {
 	AudioBackend,
 	AudioDeviceList,
 	AudioState,
+	BiquadFilter,
+	CurveFamily,
+	Diagnosis,
+	DoseResult,
+	LeqMetrics,
+	NoiseLimit,
+	RcResult,
 	ReferenceCurve,
 	ReferenceCurveInfo,
 	ReferenceCurveType,
+	RoomCriteriaResult,
+	Routing,
+	Session,
 	SignalType,
+	SmoothingFraction,
 } from "../types/audio";
 
 /** Transfer function measurement data */
@@ -124,6 +135,46 @@ export const audioApi = {
 	},
 
 	/**
+	 * Delay the transfer function reference to compensate for propagation time
+	 * @param delaySamples - Reference delay in samples
+	 */
+	setTransferFunctionDelay: (delaySamples: number): Promise<void> =>
+		invoke("set_transfer_function_delay", { delaySamples }),
+
+	/**
+	 * Get the current transfer function reference delay
+	 * @returns Reference delay in samples
+	 */
+	getTransferFunctionDelay: (): Promise<number> => invoke<number>("get_transfer_function_delay"),
+
+	/**
+	 * Set the number of frames retained by the transfer function running average
+	 * @param count - Averaging depth in frames
+	 */
+	setMaxAverages: (count: number): Promise<void> => invoke("set_max_averages", { count }),
+
+	/**
+	 * Switch between the single-FFT processor and the multi-time-window one.
+	 * A fixed FFT cannot serve the whole band: 4096 points at 48 kHz gives
+	 * 11.7 Hz resolution, adequate at 10 kHz and useless at 60 Hz.
+	 * @param multiWindow - true for multi-time-window, false for a single FFT
+	 */
+	setResolutionMode: (multiWindow: boolean): Promise<void> =>
+		invoke("set_resolution_mode", { multiWindow }),
+
+	/**
+	 * Whether the multi-time-window processor is currently active
+	 */
+	isMultiWindow: (): Promise<boolean> => invoke<boolean>("is_multi_window"),
+
+	/**
+	 * Set fractional-octave smoothing on the multi-time-window output
+	 * @param fraction - Smoothing width, or "none"
+	 */
+	setSmoothing: (fraction: SmoothingFraction): Promise<void> =>
+		invoke("set_smoothing", { fraction }),
+
+	/**
 	 * Set audio backend (requires stream to be stopped)
 	 * @param backend - Backend to use ("cpal" or "core_audio")
 	 */
@@ -170,16 +221,171 @@ export const audioApi = {
 		frequencies: number[],
 	): Promise<ReferenceCurve> =>
 		invoke<ReferenceCurve>("get_reference_curve_at_frequencies", { curveType, frequencies }),
+
+	/**
+	 * Get the rig's current diagnoses, most severe first.
+	 */
+	getDiagnostics: (): Promise<Diagnosis[]> => invoke<Diagnosis[]>("get_diagnostics"),
+
+	/**
+	 * Configure how many input channels the next stream should open.
+	 * Clamped server-side to 1-8; takes effect on the next stream start.
+	 * @param count - Number of input channels to open
+	 */
+	setInputChannelCount: (count: number): Promise<void> =>
+		invoke("set_input_channel_count", { count }),
+
+	/**
+	 * Select which input channel feeds level metering and rig diagnostics.
+	 * @param index - Zero-based channel index
+	 */
+	setMeasurementChannel: (index: number): Promise<void> =>
+		invoke("set_measurement_channel", { index }),
+
+	/**
+	 * Get the current channel routing (the set of measurement pairs and what each measures against).
+	 */
+	getRouting: (): Promise<Routing> => invoke<Routing>("get_routing"),
+
+	/**
+	 * Replace the channel routing. Rejected, with the previous routing left in place, if it
+	 * fails validation (an out-of-range channel, a pair referenced to itself, a duplicate id,
+	 * or too many pairs).
+	 * @param routing - The full set of measurement pairs to apply
+	 */
+	setRouting: (routing: Routing): Promise<void> => invoke("set_routing", { routing }),
+
+	/**
+	 * Transfer function data for one measurement pair, looked up by id.
+	 * @param pairId - The measurement pair's id
+	 */
+	getPairTransferFunction: (pairId: string): Promise<TransferFunctionData> =>
+		invoke<TransferFunctionData>("get_pair_transfer_function", { pairId }),
+
+	/**
+	 * Average several measurement positions into one trace, in the complex
+	 * domain so cancellations show up rather than being averaged away.
+	 * @param traces - Transfer function data from each position, sharing one frequency axis
+	 */
+	averageTraces: (traces: TransferFunctionData[]): Promise<TransferFunctionData> =>
+		invoke<TransferFunctionData>("average_traces", { traces }),
+
+	/**
+	 * Save a measurement session as pretty-printed JSON at the given path
+	 * @param path - Filesystem path to write the session to
+	 * @param session - The session document to persist
+	 */
+	saveSession: (path: string, session: Session): Promise<void> =>
+		invoke("save_session", { path, session }),
+
+	/**
+	 * Load a measurement session from disk
+	 * @param path - Filesystem path to read the session from
+	 */
+	loadSession: (path: string): Promise<Session> => invoke<Session>("load_session", { path }),
+
+	// ========================================================================
+	// Virtual EQ
+	// ========================================================================
+
+	/**
+	 * Predict the effect of a filter bank on a measured transfer function.
+	 * Coherence is carried through untouched by the backend.
+	 * @param trace - The measured transfer function to apply the filter bank to
+	 * @param filters - The filter bank, in series
+	 * @param sampleRate - Sample rate the filters' coefficients are computed against
+	 */
+	predictEq: (
+		trace: TransferFunctionData,
+		filters: BiquadFilter[],
+		sampleRate: number,
+	): Promise<TransferFunctionData> =>
+		invoke<TransferFunctionData>("predict_eq", { trace, filters, sampleRate }),
+
+	// ========================================================================
+	// Room Criteria
+	// ========================================================================
+
+	/**
+	 * Rate the current calibrated spectrum against an NC/NR curve family.
+	 * @param family - The curve family to rate against
+	 */
+	getRoomCriteria: (family: CurveFamily): Promise<RoomCriteriaResult> =>
+		invoke<RoomCriteriaResult>("get_room_criteria", { family }),
+
+	/** Rate the current calibrated spectrum on RC Mark II. */
+	getRcRating: (): Promise<RcResult> => invoke<RcResult>("get_rc_rating"),
+
+	// ========================================================================
+	// LEQ / noise dose
+	// ========================================================================
+
+	/**
+	 * Current LAeq/LCeq/LAFmax/LApeak/LCpeak/elapsed reading, integrated
+	 * since the stream last (re)started.
+	 */
+	getLeqMetrics: (): Promise<LeqMetrics> => invoke<LeqMetrics>("get_leq_metrics"),
+
+	/**
+	 * The shipped noise-exposure limit presets, each sourced and dated.
+	 */
+	listNoiseLimits: (): Promise<NoiseLimit[]> => invoke<NoiseLimit[]>("list_noise_limits"),
+
+	/**
+	 * Exposure dose against `limit`, computed from the live LEQ meter through
+	 * this app's live SPL calibration.
+	 * @param limit - The noise limit to compare the current measurement against
+	 */
+	computeLeqDose: (limit: NoiseLimit): Promise<DoseResult> =>
+		invoke<DoseResult>("compute_leq_dose", { limit }),
+
+	/**
+	 * Starts appending a periodic LEQ snapshot to `path` on disk.
+	 * @param path - Filesystem path to append the CSV log to
+	 * @param intervalSeconds - How often to record a snapshot, in seconds
+	 */
+	startLeqLogging: (path: string, intervalSeconds: number): Promise<void> =>
+		invoke("start_leq_logging", { path, intervalSeconds }),
+
+	/**
+	 * Stops LEQ logging, if it is running.
+	 */
+	stopLeqLogging: (): Promise<void> => invoke("stop_leq_logging"),
 };
+
+/**
+ * Measure a transfer function from two channels of a WAV file (offline analysis)
+ * @param path - Filesystem path to the WAV file
+ * @param referenceChannel - Index of the reference channel
+ * @param measurementChannel - Index of the measurement channel
+ */
+export const measureWavFile = (
+	path: string,
+	referenceChannel: number,
+	measurementChannel: number,
+): Promise<TransferFunctionData> =>
+	invoke("measure_wav_file", { path, referenceChannel, measurementChannel });
 
 export type {
 	AudioBackend,
 	AudioDevice,
 	AudioDeviceList,
 	AudioState,
+	BiquadFilter,
+	CurveFamily,
+	DoseResult,
+	FilterType,
+	LeqMetrics,
+	MeasurementPair,
+	NoiseLimit,
 	ReferenceCurve,
 	ReferenceCurveInfo,
 	ReferenceCurveType,
+	ReferenceSource,
+	RoomCriteriaResult,
+	Routing,
+	Session,
+	SessionSettings,
 	SignalType,
 	StoredTrace,
 	TraceSlot,

@@ -194,6 +194,44 @@ describe("audioApi", () => {
 		});
 	});
 
+	describe("setInputChannelCount", () => {
+		it("should call set_input_channel_count with the requested count", async () => {
+			mockInvoke.mockResolvedValueOnce(undefined);
+
+			await audioApi.setInputChannelCount(4);
+
+			expect(mockInvoke).toHaveBeenCalledWith("set_input_channel_count", { count: 4 });
+		});
+	});
+
+	describe("setMeasurementChannel", () => {
+		it("should call set_measurement_channel with the requested index", async () => {
+			mockInvoke.mockResolvedValueOnce(undefined);
+
+			await audioApi.setMeasurementChannel(2);
+
+			expect(mockInvoke).toHaveBeenCalledWith("set_measurement_channel", { index: 2 });
+		});
+	});
+
+	describe("averageTraces", () => {
+		it("should call average_traces with the given traces and return the result", async () => {
+			const trace = {
+				magnitude_db: [0, -3],
+				phase_deg: [0, 0],
+				coherence: [1, 1],
+				group_delay_ms: [0, 0],
+				frequencies: [100, 200],
+			};
+			mockInvoke.mockResolvedValueOnce(trace);
+
+			const result = await audioApi.averageTraces([trace, trace]);
+
+			expect(mockInvoke).toHaveBeenCalledWith("average_traces", { traces: [trace, trace] });
+			expect(result).toEqual(trace);
+		});
+	});
+
 	describe("stopStream", () => {
 		it("should call stop_audio_stream command", async () => {
 			mockInvoke.mockResolvedValueOnce(undefined);
@@ -277,6 +315,58 @@ describe("audioApi", () => {
 			await audioApi.setAudioBackend("core_audio");
 
 			expect(mockInvoke).toHaveBeenCalledWith("set_audio_backend", { backend: "core_audio" });
+		});
+	});
+
+	describe("saveSession", () => {
+		it("should call save_session with the path and session", async () => {
+			mockInvoke.mockResolvedValueOnce(undefined);
+			const session = {
+				version: 1,
+				created_at: "2026-09-07T12:00:00Z",
+				name: "Main PA",
+				settings: {
+					sample_rate: 48000,
+					fft_size: 4096,
+					multi_window: false,
+					smoothing: "none" as const,
+					delay_samples: 0,
+					max_averages: 16,
+				},
+				traces: [],
+			};
+
+			await audioApi.saveSession("/tmp/session.json", session);
+
+			expect(mockInvoke).toHaveBeenCalledWith("save_session", {
+				path: "/tmp/session.json",
+				session,
+			});
+		});
+	});
+
+	describe("loadSession", () => {
+		it("should call load_session with the path and return the session", async () => {
+			const session = {
+				version: 1,
+				created_at: "2026-09-07T12:00:00Z",
+				name: "Main PA",
+				settings: {
+					sample_rate: 48000,
+					fft_size: 4096,
+					multi_window: false,
+					smoothing: "none" as const,
+					delay_samples: 0,
+					max_averages: 16,
+				},
+				traces: [],
+			};
+			mockInvoke.mockResolvedValueOnce(session);
+
+			const result = await audioApi.loadSession("/tmp/session.json");
+
+			expect(mockInvoke).toHaveBeenCalledWith("load_session", { path: "/tmp/session.json" });
+			expect(result).toEqual(session);
 		});
 	});
 });

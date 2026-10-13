@@ -6,6 +6,10 @@ use std::sync::Arc;
 
 use super::windows::apply_hann_window;
 
+/// Frames retained by the running average. Past this, the oldest frames decay
+/// exponentially so the display keeps tracking the system under test.
+pub const DEFAULT_MAX_AVERAGES: usize = 16;
+
 /// Transfer function measurement data returned to frontend
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransferFunctionData {
@@ -37,6 +41,10 @@ pub struct TransferFunctionProcessor {
     ref_accumulator: Vec<f32>,
     hop_size: usize,
 
+    /// Samples by which the reference is delayed to align with the measurement.
+    /// Sourced from the delay finder; see `set_delay_samples`.
+    delay_samples: usize,
+
     // Averaging state for noise reduction (Welch's method)
     // Sxx = auto-spectrum of reference
     // Syy = auto-spectrum of input
@@ -45,13 +53,21 @@ pub struct TransferFunctionProcessor {
     syy_sum: Vec<f32>,
     sxy_sum: Vec<Complex<f32>>,
     average_count: usize,
+    max_averages: usize,
 
     // Output data
     magnitude_db: Vec<f32>,
     phase_deg: Vec<f32>,
+    /// Unwrapped phase in degrees. Internal only: group delay needs continuous
+    /// phase, but `phase_deg` is what gets displayed and must stay wrapped.
+    phase_unwrapped_deg: Vec<f32>,
     coherence: Vec<f32>,
     group_delay_ms: Vec<f32>,
     frequencies: Vec<f32>,
+
+    /// Complex transfer function H = Sxy / Sxx, retained so multi-resolution
+    /// stitching and smoothing can work in the complex domain.
+    h: Vec<Complex<f32>>,
 }
 
 impl TransferFunctionProcessor {
@@ -81,15 +97,19 @@ impl TransferFunctionProcessor {
             input_accumulator: Vec::with_capacity(fft_size * 2),
             ref_accumulator: Vec::with_capacity(fft_size * 2),
             hop_size,
+            delay_samples: 0,
             sxx_sum: vec![0.0; spectrum_len],
             syy_sum: vec![0.0; spectrum_len],
             sxy_sum: vec![Complex::new(0.0, 0.0); spectrum_len],
             average_count: 0,
+            max_averages: DEFAULT_MAX_AVERAGES,
             magnitude_db: vec![-120.0; spectrum_len],
             phase_deg: vec![0.0; spectrum_len],
+            phase_unwrapped_deg: vec![0.0; spectrum_len],
             coherence: vec![0.0; spectrum_len],
             group_delay_ms: vec![0.0; spectrum_len],
             frequencies,
+            h: vec![Complex::new(0.0, 0.0); spectrum_len],
         }
     }
 
@@ -147,6 +167,20 @@ impl TransferFunctionProcessor {
             // Sxx = |X|^2 (auto-spectrum of reference)
             // Syy = |Y|^2 (auto-spectrum of input)
             // Sxy = conj(X) * Y (cross-spectrum)
+            // Once saturated, decay the accumulated sums so they represent an
+            // exponentially weighted mean over the last `max_averages` frames
+            // rather than the whole history.
+            if self.average_count >= self.max_averages {
+                let decay = (self.max_averages - 1) as f32 / self.max_averages as f32;
+                for i in 0..self.sxx_sum.len() {
+                    self.sxx_sum[i] *= decay;
+                    self.syy_sum[i] *= decay;
+                    self.sxy_sum[i] *= decay;
+                }
+            } else {
+                self.average_count += 1;
+            }
+
             for i in 0..self.sxx_sum.len() {
                 let x = self.ref_spectrum[i];
                 let y = self.input_spectrum[i];
@@ -155,7 +189,6 @@ impl TransferFunctionProcessor {
                 self.syy_sum[i] += y.norm_sqr();
                 self.sxy_sum[i] += x.conj() * y;
             }
-            self.average_count += 1;
 
             // Compute transfer function from averaged spectra
             self.compute_transfer_function();
@@ -186,6 +219,7 @@ impl TransferFunctionProcessor {
             } else {
                 Complex::new(0.0, 0.0)
             };
+            self.h[i] = h;
 
             // Magnitude in dB
             let mag = h.norm();
@@ -209,7 +243,9 @@ impl TransferFunctionProcessor {
                 }
             }
             prev_unwrapped_phase = unwrapped_phase;
-            self.phase_deg[i] = unwrapped_phase * 180.0 / PI;
+            self.phase_unwrapped_deg[i] = unwrapped_phase * 180.0 / PI;
+            // Displayed phase stays wrapped: `arg()` already returns [-pi, pi].
+            self.phase_deg[i] = phase_rad * 180.0 / PI;
 
             // Coherence γ² = |Sxy|² / (Sxx * Syy)
             let coherence_denom = sxx * syy;
@@ -233,16 +269,16 @@ impl TransferFunctionProcessor {
             if i == 0 || i == self.group_delay_ms.len() - 1 {
                 // Edge cases: use one-sided difference
                 let phase_diff = if i == 0 {
-                    self.phase_deg[1] - self.phase_deg[0]
+                    self.phase_unwrapped_deg[1] - self.phase_unwrapped_deg[0]
                 } else {
-                    self.phase_deg[i] - self.phase_deg[i - 1]
+                    self.phase_unwrapped_deg[i] - self.phase_unwrapped_deg[i - 1]
                 };
                 // Convert phase difference (degrees) to group delay (ms)
                 // τg = -dφ/dω = -(dφ_deg / df) / 360
                 self.group_delay_ms[i] = -phase_diff / (360.0 * freq_resolution) * 1000.0;
             } else {
                 // Central difference
-                let phase_diff = self.phase_deg[i + 1] - self.phase_deg[i - 1];
+                let phase_diff = self.phase_unwrapped_deg[i + 1] - self.phase_unwrapped_deg[i - 1];
                 self.group_delay_ms[i] = -phase_diff / (2.0 * 360.0 * freq_resolution) * 1000.0;
             }
         }
@@ -283,6 +319,11 @@ impl TransferFunctionProcessor {
         &self.group_delay_ms
     }
 
+    /// Complex transfer function per bin.
+    pub fn h(&self) -> &[Complex<f32>] {
+        &self.h
+    }
+
     /// Reset averaging and clear accumulated data
     pub fn reset_averaging(&mut self) {
         self.sxx_sum.iter_mut().for_each(|v| *v = 0.0);
@@ -293,16 +334,51 @@ impl TransferFunctionProcessor {
         self.average_count = 0;
         self.magnitude_db.iter_mut().for_each(|v| *v = -120.0);
         self.phase_deg.iter_mut().for_each(|v| *v = 0.0);
+        self.phase_unwrapped_deg.iter_mut().for_each(|v| *v = 0.0);
         self.coherence.iter_mut().for_each(|v| *v = 0.0);
         self.group_delay_ms.iter_mut().for_each(|v| *v = 0.0);
+        self.h.iter_mut().for_each(|v| *v = Complex::new(0.0, 0.0));
         self.input_accumulator.clear();
         self.ref_accumulator.clear();
+        // Priming the reference with `delay_samples` zeros delays it by exactly that
+        // many samples, aligning x[n-D] with the measurement y[n].
+        self.ref_accumulator.resize(self.delay_samples, 0.0);
     }
 
-    /// Change FFT size (resets processor)
+    /// Delay the reference signal by `delay` samples before computing the transfer
+    /// function, compensating for the acoustic propagation time to the measurement
+    /// microphone. Resets averaging, since accumulated frames used the old alignment.
+    pub fn set_delay_samples(&mut self, delay: usize) {
+        if delay == self.delay_samples {
+            return;
+        }
+        self.delay_samples = delay;
+        self.reset_averaging();
+    }
+
+    /// Current reference delay in samples.
+    pub fn delay_samples(&self) -> usize {
+        self.delay_samples
+    }
+
+    /// Number of frames retained by the running average. Higher is smoother and
+    /// slower to react; lower is noisier and more responsive.
+    pub fn set_max_averages(&mut self, n: usize) {
+        self.max_averages = n.max(1);
+    }
+
+    /// Current averaging depth in frames.
+    pub fn max_averages(&self) -> usize {
+        self.max_averages
+    }
+
+    /// Change FFT size (resets processor, preserves delay compensation and averaging depth)
     pub fn set_fft_size(&mut self, fft_size: usize) {
         if fft_size != self.fft_size && fft_size.is_power_of_two() {
+            let (delay, max_avg) = (self.delay_samples, self.max_averages);
             *self = Self::new(fft_size, self.sample_rate);
+            self.set_delay_samples(delay);
+            self.set_max_averages(max_avg);
         }
     }
 
@@ -319,7 +395,6 @@ impl TransferFunctionProcessor {
     }
 
     /// Get current FFT size
-    #[allow(dead_code)]
     pub fn fft_size(&self) -> usize {
         self.fft_size
     }
@@ -664,6 +739,29 @@ mod tests {
         let data = processor.get_data();
         for &coh in &data.coherence {
             assert!((0.0..=1.0).contains(&coh), "Coherence must be in [0, 1]");
+        }
+    }
+
+    #[test]
+    fn complex_h_agrees_with_magnitude_and_phase() {
+        let mut processor = TransferFunctionProcessor::new(1024, 48000.0);
+        let x: Vec<f32> = (0..8192)
+            .map(|i| ((i * 7919) % 2003) as f32 / 1000.0 - 1.0)
+            .collect();
+        let y: Vec<f32> = x.iter().map(|s| s * 0.5).collect();
+        processor.process(&y, &x);
+
+        let h = processor.h();
+        let mag = processor.get_magnitude_db();
+        assert_eq!(h.len(), mag.len());
+
+        for i in 10..100 {
+            let from_complex = 20.0 * h[i].norm().log10();
+            assert!(
+                (from_complex - mag[i]).abs() < 0.01,
+                "bin {i}: complex says {from_complex:.3} dB, magnitude_db says {:.3}",
+                mag[i]
+            );
         }
     }
 }

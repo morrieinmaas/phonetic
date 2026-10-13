@@ -20,6 +20,15 @@ pub struct AudioDeviceList {
     pub default_output: Option<String>,
 }
 
+/// Input device names only, for the CLI.
+pub fn list_input_devices() -> Vec<String> {
+    enumerate_devices()
+        .inputs
+        .into_iter()
+        .map(|d| d.name)
+        .collect()
+}
+
 pub fn enumerate_devices() -> AudioDeviceList {
     let host = cpal::default_host();
 

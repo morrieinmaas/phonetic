@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { applyPan, applyZoom, pixelToLogFrequency } from "../lib/plot-scales";
 
 interface WebGLSpectrumProps {
 	spectrumData: number[];
@@ -13,15 +14,15 @@ const THEME_COLORS = {
 	dark: {
 		background: [0.05, 0.05, 0.08] as const,
 		labelFill: "#e5e5e5",
-		gridStroke: "rgba(255,255,255,0.1)",
-		containerBg: "bg-[#0d0d12]",
+		gridStroke: "rgba(255,255,255,0.30)",
+		containerBg: "bg-[#191922]",
 		peakHold: "#f59e0b",
 	},
 	light: {
 		background: [0.97, 0.97, 0.98] as const,
 		labelFill: "#171717",
-		gridStroke: "rgba(0,0,0,0.15)",
-		containerBg: "bg-[#f8f8fa]",
+		gridStroke: "rgba(0,0,0,0.28)",
+		containerBg: "bg-[#eeeef3]",
 		peakHold: "#d97706",
 	},
 };
@@ -81,10 +82,40 @@ const freqToX = (freq: number, width: number, minFreq = 20, maxFreq = 20000): nu
 };
 
 // Map dB value to pixel Y position
+/** Frequencies the grid marks. Decades and the half-decades between them, which
+    is how a system technician reads an audio plot. Only the majors get a label,
+    so the axis stays legible at any width. */
+const GRID_FREQUENCIES: { hz: number; label?: string }[] = [
+	{ hz: 20, label: "20" },
+	{ hz: 50 },
+	{ hz: 100, label: "100" },
+	{ hz: 200 },
+	{ hz: 500 },
+	{ hz: 1000, label: "1k" },
+	{ hz: 2000 },
+	{ hz: 5000, label: "5k" },
+	{ hz: 10000, label: "10k" },
+	{ hz: 20000, label: "20k" },
+];
+
+/** Amplitude gridlines, matching the renderer's -120..0 dB range. */
+const GRID_DECIBELS = [0, -20, -40, -60, -80, -100, -120];
+
+/** Horizontal position of a frequency, as a percentage of plot width. */
+const freqToPercent = (hz: number, minFreq = 20, maxFreq = 20000): number =>
+	((Math.log10(hz) - Math.log10(minFreq)) / (Math.log10(maxFreq) - Math.log10(minFreq))) * 100;
+
+/** Vertical position of a level, as a percentage of plot height. */
+const dbToPercent = (db: number, minDb = -120, maxDb = 0): number =>
+	((maxDb - db) / (maxDb - minDb)) * 100;
+
 const dbToY = (db: number, height: number, minDb = -120, maxDb = 0): number => {
 	const normalized = (db - minDb) / (maxDb - minDb);
 	return height * (1 - Math.max(0, Math.min(1, normalized)));
 };
+
+/** Full frequency range of the plot, and the limit that zoom/pan gestures cannot cross. */
+const FREQ_LIMITS: [number, number] = [20, 20000];
 
 // Create and compile a shader
 const createShader = (
@@ -138,6 +169,8 @@ export const WebGLSpectrum = ({
 }: WebGLSpectrumProps) => {
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 	const peakCanvasRef = useRef<HTMLCanvasElement>(null);
+	const plotContainerRef = useRef<HTMLDivElement>(null);
+	const freqRangeRef = useRef<[number, number]>(FREQ_LIMITS);
 	const glRef = useRef<WebGLRenderingContext | null>(null);
 	const programRef = useRef<WebGLProgram | null>(null);
 	const positionBufferRef = useRef<WebGLBuffer | null>(null);
@@ -317,8 +350,8 @@ export const WebGLSpectrum = ({
 			const db = count > 0 ? sum / count : MIN_DB;
 			logDbValues.push(db);
 
-			const x1 = freqToX(freq, width);
-			const x2 = freqToX(nextFreq, width);
+			const x1 = freqToX(freq, width, freqRangeRef.current[0], freqRangeRef.current[1]);
+			const x2 = freqToX(nextFreq, width, freqRangeRef.current[0], freqRangeRef.current[1]);
 			const y1 = height;
 			const y2 = dbToY(db, height, MIN_DB, MAX_DB);
 
@@ -377,7 +410,7 @@ export const WebGLSpectrum = ({
 					const freq = logFreqs[i];
 					if (freq === undefined) continue;
 
-					const x = freqToX(freq, width);
+					const x = freqToX(freq, width, freqRangeRef.current[0], freqRangeRef.current[1]);
 					const y = dbToY(peakHoldRef.current[i] ?? -120, height, MIN_DB, MAX_DB);
 
 					if (i === 0) {
@@ -429,6 +462,37 @@ export const WebGLSpectrum = ({
 		}
 	}, [spectrumData, isRunning, renderSpectrum]);
 
+	// Trackpad gestures: ctrl+wheel pinch zooms about the pointer, plain wheel pans.
+	useEffect(() => {
+		const container = plotContainerRef.current;
+		if (!container) return;
+
+		const handleWheel = (event: WheelEvent) => {
+			event.preventDefault();
+
+			const rect = container.getBoundingClientRect();
+			const width = rect.width || 1;
+			const pointerX = event.clientX - rect.left;
+			const [lo, hi] = freqRangeRef.current;
+			const anchor = pixelToLogFrequency(pointerX, width, lo, hi);
+
+			freqRangeRef.current = event.ctrlKey
+				? applyZoom(freqRangeRef.current, Math.exp(event.deltaY * 0.01), anchor, FREQ_LIMITS)
+				: applyPan(freqRangeRef.current, (event.deltaX || event.deltaY) / width, FREQ_LIMITS);
+
+			requestAnimationFrame(renderSpectrum);
+		};
+
+		container.addEventListener("wheel", handleWheel, { passive: false });
+		return () => container.removeEventListener("wheel", handleWheel);
+	}, [renderSpectrum]);
+
+	// Double-click resets the plot back to the full frequency range.
+	const handleResetZoom = useCallback(() => {
+		freqRangeRef.current = FREQ_LIMITS;
+		requestAnimationFrame(renderSpectrum);
+	}, [renderSpectrum]);
+
 	return (
 		<div className="flex flex-col h-full min-h-0">
 			<div className="flex items-center justify-between mb-2 flex-shrink-0">
@@ -465,71 +529,109 @@ export const WebGLSpectrum = ({
 				</div>
 			</div>
 			<div
-				className={`flex-1 min-h-[280px] relative rounded-lg overflow-hidden ${themeColors.containerBg}`}
+				ref={plotContainerRef}
+				className={`relative min-h-0 flex-1 overflow-hidden rounded-lg ${themeColors.containerBg}`}
+				onDoubleClick={handleResetZoom}
 			>
 				<canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
 				<canvas
 					ref={peakCanvasRef}
 					className="absolute inset-0 w-full h-full pointer-events-none"
 				/>
-				{/* Grid overlay using SVG */}
+				{/* Grid lines in a fixed 0-100 coordinate space, stretched to the plot
+				    by preserveAspectRatio="none". Percentage geometry on a viewBox-less
+				    SVG proved unreliable here; plain numbers in a declared space are
+				    not. non-scaling-stroke keeps the lines 1px however far they stretch.
+				    Positions come from the same mappings the renderer draws with. */}
 				<svg
-					className="absolute inset-0 w-full h-full pointer-events-none"
+					className="pointer-events-none absolute inset-0 h-full w-full"
+					viewBox="0 0 100 100"
 					preserveAspectRatio="none"
 					aria-labelledby="spectrum-grid-title"
 				>
 					<title id="spectrum-grid-title">Spectrum analyzer frequency and amplitude grid</title>
-					<defs>
-						<pattern id="grid" width="100" height="50" patternUnits="userSpaceOnUse">
-							<line
-								x1="0"
-								y1="50"
-								x2="100"
-								y2="50"
-								stroke={themeColors.gridStroke}
-								strokeWidth="0.5"
-							/>
-						</pattern>
-					</defs>
-					{/* Frequency labels */}
-					<text x="5%" y="96%" fill={themeColors.labelFill} fontSize="12" fontWeight="bold">
-						20
-					</text>
-					<text x="20%" y="96%" fill={themeColors.labelFill} fontSize="12" fontWeight="bold">
-						100
-					</text>
-					<text x="40%" y="96%" fill={themeColors.labelFill} fontSize="12" fontWeight="bold">
-						1k
-					</text>
-					<text x="60%" y="96%" fill={themeColors.labelFill} fontSize="12" fontWeight="bold">
-						5k
-					</text>
-					<text x="80%" y="96%" fill={themeColors.labelFill} fontSize="12" fontWeight="bold">
-						10k
-					</text>
-					<text x="95%" y="96%" fill={themeColors.labelFill} fontSize="12" fontWeight="bold">
-						20k
-					</text>
-					{/* dB labels */}
-					<text x="2%" y="8%" fill={themeColors.labelFill} fontSize="12" fontWeight="bold">
-						0dB
-					</text>
-					<text x="2%" y="30%" fill={themeColors.labelFill} fontSize="12" fontWeight="bold">
-						-30
-					</text>
-					<text x="2%" y="55%" fill={themeColors.labelFill} fontSize="12" fontWeight="bold">
-						-60
-					</text>
-					<text x="2%" y="80%" fill={themeColors.labelFill} fontSize="12" fontWeight="bold">
-						-90
-					</text>
-					<text x="2%" y="95%" fill={themeColors.labelFill} fontSize="12" fontWeight="bold">
-						-120
-					</text>
+					{GRID_FREQUENCIES.map(({ hz, label }) => (
+						<line
+							key={`f-${hz}`}
+							x1={freqToPercent(hz)}
+							y1={0}
+							x2={freqToPercent(hz)}
+							y2={100}
+							stroke={themeColors.gridStroke}
+							strokeWidth={label ? 1 : 0.5}
+							vectorEffect="non-scaling-stroke"
+						/>
+					))}
+					{GRID_DECIBELS.map((db) => (
+						<line
+							key={`d-${db}`}
+							x1={0}
+							y1={dbToPercent(db)}
+							x2={100}
+							y2={dbToPercent(db)}
+							stroke={themeColors.gridStroke}
+							strokeWidth={1}
+							vectorEffect="non-scaling-stroke"
+						/>
+					))}
 				</svg>
+
+				{/* Labels as positioned HTML rather than SVG text: a stretched
+				    coordinate space would distort glyphs, and HTML text stays crisp.
+				    The labels at the extremes anchor inward instead of centring on
+				    their gridline — a centred label at 0% or 100% has half its width
+				    outside the plot, which overflow-hidden then cut off. */}
+				<div className="pointer-events-none absolute inset-0">
+					{GRID_FREQUENCIES.filter((f) => f.label).map(({ hz, label }, index, labelled) => {
+						const isFirst = index === 0;
+						const isLast = index === labelled.length - 1;
+						return (
+							<span
+								key={`fl-${hz}`}
+								className="absolute text-xs font-bold"
+								style={{
+									left: `${freqToPercent(hz)}%`,
+									bottom: 3,
+									transform: isFirst
+										? "translateX(2px)"
+										: isLast
+											? "translateX(calc(-100% - 2px))"
+											: "translateX(-50%)",
+									color: themeColors.labelFill,
+								}}
+							>
+								{label}
+							</span>
+						);
+					})}
+					{GRID_DECIBELS.map((db, index) => {
+						const isTop = index === 0;
+						const isBottom = index === GRID_DECIBELS.length - 1;
+						return (
+							<span
+								key={`dl-${db}`}
+								className="absolute text-xs font-bold"
+								style={{
+									left: 6,
+									top: `${dbToPercent(db)}%`,
+									transform: isTop
+										? "translateY(2px)"
+										: isBottom
+											? "translateY(calc(-100% - 2px))"
+											: "translateY(-50%)",
+									color: themeColors.labelFill,
+								}}
+							>
+								{db === 0 ? "0dB" : String(db)}
+							</span>
+						);
+					})}
+				</div>
 				{!isRunning && (
-					<div className="absolute inset-0 flex items-center justify-center text-muted-foreground bg-background/50 z-10">
-						Start audio stream to see spectrum
+					<div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
+						<span className="rounded-md border border-border bg-card px-3 py-1.5 text-sm text-muted-foreground shadow-lg">
+							Start audio stream to see spectrum
+						</span>
 					</div>
 				)}
 			</div>

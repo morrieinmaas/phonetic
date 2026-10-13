@@ -1,6 +1,7 @@
 {
 	"name": "phonetic",
 	"private": true,
+	"license": "SEE LICENSE IN LICENSE",
 	"workspaces": ["apps/*", "packages/*"],
 	"scripts": {
 		"dev": "turbo dev",

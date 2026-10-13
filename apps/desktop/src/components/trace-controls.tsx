@@ -1,4 +1,6 @@
 import { useCallback, useState } from "react";
+import { audioApi } from "../services/audio-api";
+import { applyMeasuredDelay } from "../services/delay-apply";
 import { useTraceStore } from "../stores/trace-store";
 import type { TraceSlot, TransferFunctionData } from "../types/audio";
 
@@ -10,9 +12,47 @@ interface TraceControlsProps {
 const SLOTS: TraceSlot[] = ["A", "B", "C", "D"];
 
 export const TraceControls = ({ currentData, isRunning }: TraceControlsProps) => {
-	const { traces, slots, captureToSlot, toggleTraceVisibility, deleteTrace, clearAllTraces } =
-		useTraceStore();
+	const {
+		traces,
+		slots,
+		captureToSlot,
+		toggleTraceVisibility,
+		deleteTrace,
+		clearAllTraces,
+		captureTrace,
+	} = useTraceStore();
 	const [showList, setShowList] = useState(false);
+	const [delayInput, setDelayInput] = useState("");
+	const [delayStatus, setDelayStatus] = useState<"idle" | "applied" | "rejected">("idle");
+	const [appliedDelay, setAppliedDelay] = useState<number | null>(null);
+	const [averageStatus, setAverageStatus] = useState<"idle" | "error">("idle");
+
+	const handleApplyDelay = useCallback(async () => {
+		const delaySamples = Number(delayInput);
+		const applied = await applyMeasuredDelay({
+			delay_samples: delaySamples,
+			is_valid: Number.isFinite(delaySamples),
+		});
+		if (applied) {
+			setAppliedDelay(delaySamples);
+			setDelayStatus("applied");
+		} else {
+			setDelayStatus("rejected");
+		}
+	}, [delayInput]);
+
+	const visibleTraces = traces.filter((trace) => trace.visible);
+
+	const handleAverageTraces = useCallback(async () => {
+		if (visibleTraces.length === 0) return;
+		try {
+			const averaged = await audioApi.averageTraces(visibleTraces.map((trace) => trace.data));
+			captureTrace(averaged, `Spatial average (${visibleTraces.length})`);
+			setAverageStatus("idle");
+		} catch {
+			setAverageStatus("error");
+		}
+	}, [visibleTraces, captureTrace]);
 
 	const handleSlotClick = useCallback(
 		(slot: TraceSlot) => {
@@ -49,7 +89,16 @@ export const TraceControls = ({ currentData, isRunning }: TraceControlsProps) =>
 		<div className="flex items-center gap-2">
 			{/* Slot buttons for quick A/B comparison */}
 			<div className="flex items-center gap-1">
-				<span className="text-xs text-muted-foreground mr-1">Store:</span>
+				<span
+					className="text-xs text-muted-foreground mr-1"
+					title={
+						canCapture
+							? "Click a slot to store the live trace; click it again to clear"
+							: "Start the stream to capture a trace"
+					}
+				>
+					Capture:
+				</span>
 				{SLOTS.map((slot) => {
 					const trace = getSlotTrace(slot);
 					const hasTrace = !!trace;
@@ -58,6 +107,7 @@ export const TraceControls = ({ currentData, isRunning }: TraceControlsProps) =>
 						<button
 							key={slot}
 							type="button"
+							data-testid={slot === "A" ? "capture-trace" : undefined}
 							onClick={() => handleSlotClick(slot)}
 							disabled={!hasTrace && !canCapture}
 							title={
@@ -80,6 +130,52 @@ export const TraceControls = ({ currentData, isRunning }: TraceControlsProps) =>
 						</button>
 					);
 				})}
+			</div>
+
+			{/* Apply a measured delay to compensate the transfer function reference */}
+			<div className="flex items-center gap-1 ml-2 border-l border-border pl-2">
+				<span className="text-xs text-muted-foreground mr-1">Delay:</span>
+				<input
+					type="number"
+					min={0}
+					value={delayInput}
+					onChange={(e) => setDelayInput(e.target.value)}
+					placeholder="samples"
+					className="w-16 px-1 py-0.5 text-xs rounded border border-border bg-background"
+				/>
+				<button
+					type="button"
+					data-testid="apply-delay"
+					onClick={handleApplyDelay}
+					disabled={delayInput === ""}
+					title="Apply the measured delay to compensate the transfer function reference"
+					className="px-2 py-1 text-xs rounded border border-border hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed"
+				>
+					Apply
+				</button>
+				{delayStatus === "applied" && (
+					<span className="text-[10px] text-muted-foreground">Applied {appliedDelay} smp</span>
+				)}
+				{delayStatus === "rejected" && (
+					<span className="text-[10px] text-destructive">Invalid delay</span>
+				)}
+			</div>
+
+			{/* Average the currently visible traces into one spatially-averaged trace */}
+			<div className="flex items-center gap-1 ml-2 border-l border-border pl-2">
+				<button
+					type="button"
+					data-testid="average-traces"
+					onClick={handleAverageTraces}
+					disabled={visibleTraces.length === 0}
+					title="Average the currently visible traces in the complex domain"
+					className="px-2 py-1 text-xs rounded border border-border hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed"
+				>
+					Average selected
+				</button>
+				{averageStatus === "error" && (
+					<span className="text-[10px] text-destructive">Averaging failed</span>
+				)}
 			</div>
 
 			{/* Show/hide toggle buttons for each stored trace */}
@@ -131,7 +227,7 @@ export const TraceControls = ({ currentData, isRunning }: TraceControlsProps) =>
 									Clear All
 								</button>
 							</div>
-							<div className="max-h-48 overflow-y-auto">
+							<div data-testid="trace-list" className="max-h-48 overflow-y-auto">
 								{traces.map((trace) => (
 									<div
 										key={trace.id}

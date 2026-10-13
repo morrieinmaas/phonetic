@@ -7,6 +7,7 @@ interface DeviceSelectorProps {
 	defaultDeviceId: string | null;
 	onSelect: (deviceId: string | null) => void;
 	disabled?: boolean;
+	testId?: string;
 }
 
 export const DeviceSelector = ({
@@ -16,6 +17,7 @@ export const DeviceSelector = ({
 	defaultDeviceId,
 	onSelect,
 	disabled = false,
+	testId,
 }: DeviceSelectorProps) => {
 	const handleChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
 		const value = e.target.value;
@@ -35,6 +37,7 @@ export const DeviceSelector = ({
 			</label>
 			<select
 				id={inputId}
+				data-testid={testId}
 				value={selectedDeviceId ?? ""}
 				onChange={handleChange}
 				disabled={disabled}
