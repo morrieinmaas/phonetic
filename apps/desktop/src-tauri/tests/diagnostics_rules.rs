@@ -187,6 +187,18 @@ fn broadband_low_coherence_without_delay_is_flagged_as_noise() {
 }
 
 #[test]
+fn low_coherence_is_not_reported_without_a_reference_signal() {
+    let mut s = healthy();
+    s.coherence = vec![0.2; s.frequencies.len()];
+    s.reference_rms = 0.0;
+    s.reference_peak = 0.0;
+    assert!(
+        !diagnose(&s).iter().any(|d| d.code == "low_coherence"),
+        "with the generator off there is nothing to be coherent with"
+    );
+}
+
+#[test]
 fn diagnoses_are_ranked_most_severe_first() {
     let mut s = healthy();
     s.measurement_peak = 0.9999; // Error

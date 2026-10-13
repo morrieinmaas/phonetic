@@ -224,6 +224,12 @@ fn sample_rate_drift(s: &RigSnapshot) -> Option<Diagnosis> {
 }
 
 fn low_coherence(s: &RigSnapshot) -> Option<Diagnosis> {
+    // Coherence compares measurement with reference. With no reference signal
+    // (generator off, nothing on the reference input) it is low by definition,
+    // and telling the operator to "raise the signal" is wrong advice.
+    if s.reference_rms <= SILENCE_RMS {
+        return None;
+    }
     if mean(&s.coherence) >= LOW_COHERENCE {
         return None;
     }
