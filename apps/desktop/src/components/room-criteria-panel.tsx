@@ -2,188 +2,236 @@ import type { RcQuality, RcResult, RoomCriteriaFamily, RoomCriteriaResult } from
 
 const OCTAVE_BAND_HZ = [63, 125, 250, 500, 1000, 2000, 4000, 8000] as const;
 
-/** RC Mark II's own nine octave bands — wider and lower than the NC/NR set above. */
+/** RC Mark II's own nine octave bands, wider and lower than the NC/NR set above. */
 const RC_OCTAVE_BAND_HZ = [16, 31.5, 63, 125, 250, 500, 1000, 2000, 4000] as const;
 
 const FAMILY_OPTIONS: { value: RoomCriteriaFamily; label: string }[] = [
-	{ value: "nc", label: "NC — Noise Criteria" },
-	{ value: "nr", label: "NR — Noise Rating" },
-	{ value: "rc", label: "RC — Room Criterion" },
+	{ value: "nc", label: "NC (Noise Criteria, US)" },
+	{ value: "nr", label: "NR (Noise Rating, EU/UK)" },
+	{ value: "rc", label: "RC Mark II (HVAC sound quality)" },
 ];
 
-/** What each RC Mark II quality letter means, spelled out — "LF" alone means nothing to most operators. */
+/** What each RC Mark II quality letter means, spelled out; "LF" alone means nothing to most operators. */
 const RC_QUALITY_INFO: Record<RcQuality, { code: string; meaning: string }> = {
-	neutral: { code: "N", meaning: "neutral" },
+	neutral: { code: "N", meaning: "neutral, well balanced" },
 	low_frequency: { code: "LF", meaning: "low-frequency rumble" },
 	mid_frequency: { code: "MF", meaning: "mid-frequency roar" },
 	high_frequency: { code: "HF", meaning: "high-frequency hiss" },
 };
 
+/**
+ * Typical design targets for background noise, as commonly published (for example in the
+ * ASHRAE Handbook's guidance tables). Approximate, and the same order of magnitude for NC, NR
+ * and RC; they give a rating meaning without claiming a requirement.
+ */
+export const TYPICAL_TARGETS: { upTo: number; spaces: string }[] = [
+	{ upTo: 20, spaces: "concert halls, recording studios" },
+	{ upTo: 25, spaces: "theatres, broadcast studios" },
+	{ upTo: 30, spaces: "bedrooms, classrooms, meeting rooms" },
+	{ upTo: 35, spaces: "private offices, libraries" },
+	{ upTo: 40, spaces: "open-plan offices, restaurants" },
+	{ upTo: 50, spaces: "lobbies, shops, kitchens" },
+];
+
+/** The kind of room a rating is typical for, or null when it is louder than any of them. */
+export const typicalFor = (rating: number): string | null =>
+	TYPICAL_TARGETS.find((target) => rating <= target.upTo)?.spaces ?? null;
+
 interface RoomCriteriaPanelProps {
-	/** Which family is selected. Falls back to `result`'s family when omitted, so callers that
-	 * only ever show NC/NR (and existing tests) don't need to pass it. */
+	/** Which family is selected. Falls back to `result`'s family when omitted. */
 	family?: RoomCriteriaFamily;
 	result: RoomCriteriaResult | null;
 	rcResult?: RcResult | null;
 	onFamilyChange: (family: RoomCriteriaFamily) => void;
 }
 
-const formatDb = (value: number | undefined): string =>
-	value === undefined ? "—" : value.toFixed(1);
+interface BandChartProps {
+	bands: readonly number[];
+	levels: number[];
+	curve: number[];
+	curveLabel: string;
+	/** Bands to draw in the warning colour, e.g. RC bands with too few FFT bins. */
+	thinBands?: boolean[];
+	highlightHz?: number;
+	/**
+	 * Colour bands above the curve red. Right for NC/NR, where that means the room is louder
+	 * than the rating; wrong for RC, where deviation from the line describes sound quality.
+	 */
+	markOver?: boolean;
+}
 
-/** Rating readout: the family's letter code plus the tangency number, e.g. "NC-30". */
-const RatingHeadline = ({ result }: { result: RoomCriteriaResult }) => (
-	<div className="flex items-baseline gap-3">
-		<span className="font-mono text-3xl font-bold text-foreground tabular-nums">
-			{`${result.family.toUpperCase()}-${result.rating}`}
-		</span>
-		<span className="text-xs text-muted-foreground">
-			Exceeded by the {result.exceeded_band_hz} Hz band
-		</span>
+/**
+ * Measured octave-band levels as columns against the rating curve as a line. Seeing which
+ * columns reach the line is the whole idea of a tangency rating; a grid of numbers hid it.
+ */
+const BandChart = ({
+	bands,
+	levels,
+	curve,
+	curveLabel,
+	thinBands,
+	highlightHz,
+	markOver = true,
+}: BandChartProps) => {
+	const values = [...levels, ...curve].filter(Number.isFinite);
+	const lo = Math.floor((Math.min(...values) - 5) / 10) * 10;
+	const hi = Math.ceil((Math.max(...values) + 5) / 10) * 10;
+	const width = 100 / bands.length;
+	const y = (db: number) => 100 - ((db - lo) / (hi - lo || 1)) * 100;
+	const curvePoints = curve.map((db, i) => `${(i + 0.5) * width},${y(db)}`).join(" ");
+
+	return (
+		<figure className="flex min-h-[180px] flex-1 flex-col gap-1">
+			<div className="relative min-h-0 flex-1">
+				<svg
+					viewBox="0 0 100 100"
+					preserveAspectRatio="none"
+					className="absolute inset-0 h-full w-full overflow-visible"
+					role="img"
+					aria-label={`Octave band levels against the ${curveLabel} curve`}
+				>
+					{bands.map((hz, i) => {
+						const level = levels[i] ?? lo;
+						const limit = curve[i] ?? hi;
+						const over = markOver && level > limit;
+						const fill = over
+							? "fill-red-500/70"
+							: thinBands?.[i]
+								? "fill-amber-500/50"
+								: hz === highlightHz
+									? "fill-primary"
+									: "fill-primary/45";
+						return (
+							<rect
+								key={hz}
+								x={i * width + width * 0.18}
+								width={width * 0.64}
+								y={y(level)}
+								height={Math.max(0, 100 - y(level))}
+								className={fill}
+							/>
+						);
+					})}
+					<polyline
+						points={curvePoints}
+						fill="none"
+						className="stroke-foreground"
+						strokeWidth="2"
+						vectorEffect="non-scaling-stroke"
+						strokeLinejoin="round"
+					/>
+				</svg>
+				{/* Values as HTML so the stretched SVG cannot distort the digits. */}
+				{bands.map((hz, i) => (
+					<span
+						key={hz}
+						className="absolute -translate-x-1/2 pt-0.5 font-mono text-xs tabular-nums text-foreground"
+						style={{ left: `${(i + 0.5) * width}%`, top: `${y(levels[i] ?? lo)}%` }}
+					>
+						{(levels[i] ?? 0).toFixed(0)}
+					</span>
+				))}
+			</div>
+			<div className="grid" style={{ gridTemplateColumns: `repeat(${bands.length}, 1fr)` }}>
+				{bands.map((hz) => (
+					<span
+						key={hz}
+						className={`text-center font-mono text-xs ${hz === highlightHz ? "font-semibold text-foreground" : "text-muted-foreground"}`}
+					>
+						{hz >= 1000 ? `${hz / 1000}k` : hz}
+					</span>
+				))}
+			</div>
+			<figcaption className="flex items-center gap-4 text-xs text-muted-foreground">
+				<span className="flex items-center gap-1.5">
+					<span className="h-2.5 w-2.5 rounded-sm bg-primary/45" />
+					Measured, dB SPL per octave band (Hz)
+				</span>
+				<span className="flex items-center gap-1.5">
+					<span className="h-0.5 w-4 bg-foreground" />
+					{curveLabel}
+				</span>
+			</figcaption>
+		</figure>
+	);
+};
+
+const Headline = ({ title, detail }: { title: string; detail: string }) => (
+	<div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+		<span className="font-mono text-3xl font-bold tabular-nums text-foreground">{title}</span>
+		<span className="text-sm text-muted-foreground">{detail}</span>
 	</div>
 );
 
-/**
- * RC readout: the level and the quality letter together, e.g. "RC-35 (LF)", plus the
- * letter's meaning spelled out in words.
- */
-const RcHeadline = ({ result }: { result: RcResult }) => {
-	const info = RC_QUALITY_INFO[result.quality];
-	return (
-		<div className="flex items-baseline gap-3">
-			<span className="font-mono text-3xl font-bold text-foreground tabular-nums">
-				{`RC-${Math.round(result.level)} (${info.code})`}
-			</span>
-			<span className="text-xs text-muted-foreground">{info.meaning}</span>
-		</div>
+const TangencyContent = ({ result }: { result: RoomCriteriaResult }) => {
+	const name = result.family.toUpperCase();
+	const offScale = result.band_levels_db.some(
+		(level, i) => level > (result.curve_db[i] ?? Number.POSITIVE_INFINITY),
 	);
-};
-
-interface BandCellProps {
-	hz: number;
-	levelDb: number | undefined;
-	curveDb: number | undefined;
-	isDeterminingBand: boolean;
-}
-
-const BandCell = ({ hz, levelDb, curveDb, isDeterminingBand }: BandCellProps) => {
-	const exceedsCurve = levelDb !== undefined && curveDb !== undefined && levelDb > curveDb;
+	const typical = typicalFor(result.rating);
 
 	return (
-		<div
-			className={`flex flex-col items-center gap-0.5 rounded border px-1 py-1.5 ${
-				isDeterminingBand ? "border-primary bg-primary/10" : "border-border/50"
-			}`}
-		>
-			<span className="font-mono text-[10px] text-muted-foreground">{hz}</span>
-			<span
-				className={`font-mono text-sm tabular-nums ${exceedsCurve ? "text-red-400" : "text-foreground"}`}
-			>
-				{formatDb(levelDb)}
-			</span>
-			<span className="font-mono text-[10px] tabular-nums text-muted-foreground/70">
-				/{formatDb(curveDb)}
-			</span>
-		</div>
-	);
-};
-
-interface RcBandCellProps {
-	hz: number;
-	levelDb: number | undefined;
-	referenceDb: number | undefined;
-	bins: number | undefined;
-	/** Comes from the backend with the rating, so the panel marks the same
-	 *  bands thin that `under_resolved` was computed from. */
-	minBins: number;
-}
-
-/** One RC band: measured level over the reference line, plus its FFT bin count — the number
- * that tells the operator whether this band's reading means anything. */
-const RcBandCell = ({ hz, levelDb, referenceDb, bins, minBins }: RcBandCellProps) => {
-	const thin = bins !== undefined && bins < minBins;
-
-	return (
-		<div
-			className={`flex flex-col items-center gap-0.5 rounded border px-1 py-1.5 ${
-				thin ? "border-amber-500/60 bg-amber-500/10" : "border-border/50"
-			}`}
-		>
-			<span className="font-mono text-[10px] text-muted-foreground">{hz}</span>
-			<span className="font-mono text-sm tabular-nums text-foreground">{formatDb(levelDb)}</span>
-			<span className="font-mono text-[10px] tabular-nums text-muted-foreground/70">
-				/{formatDb(referenceDb)}
-			</span>
-			<span
-				className={`font-mono text-[9px] tabular-nums ${thin ? "text-amber-400" : "text-muted-foreground/60"}`}
-			>
-				{bins ?? "—"} bin{bins === 1 ? "" : "s"}
-			</span>
-		</div>
+		<>
+			<Headline
+				title={offScale ? `Above ${name}-${result.rating}` : `${name}-${result.rating}`}
+				detail={
+					offScale
+						? `Louder than the highest ${name} curve; the ${result.exceeded_band_hz} Hz band is furthest over.`
+						: `Set by the ${result.exceeded_band_hz} Hz band, the one closest to its limit.${typical ? ` Typical for ${typical}.` : ""}`
+				}
+			/>
+			<BandChart
+				bands={OCTAVE_BAND_HZ}
+				levels={result.band_levels_db}
+				curve={result.curve_db}
+				curveLabel={`${name} rating curve`}
+				highlightHz={result.exceeded_band_hz}
+			/>
+		</>
 	);
 };
 
 /**
- * Prominent, plain-language guidance for when RC's low bands don't have enough FFT bins to
- * back a trustworthy reading. This is guidance, not an error — the mid/high-frequency reading
- * is still usable — so it uses the same amber warning treatment as `DiagnosticsBanner`, not red.
+ * Plain-language guidance for when RC's low bands don't have enough FFT bins to back a
+ * trustworthy reading. Guidance, not an error: the mid and high reading still stands.
  */
 const UnderResolvedWarning = () => (
 	<div
 		data-testid="rc-under-resolved-warning"
-		className="rounded border border-amber-500/60 bg-card px-3 py-2 text-[11px] leading-snug text-amber-400"
+		className="rounded-md border border-amber-500/60 px-3 py-2 text-xs leading-snug text-foreground"
 	>
-		<p className="font-semibold">Low-frequency bands are under-resolved</p>
-		<p>
-			At the current FFT size, one or more bands below 63 Hz don't contain enough FFT bins for a
-			reliable reading (per-band bin counts are shown below) — the low-frequency classification
-			above may not be trustworthy. Raise the FFT size in Settings to resolve them. The mid- and
-			high-frequency reading is still usable as-is.
-		</p>
+		<span className="font-semibold text-amber-500">Low-frequency bands are under-resolved. </span>
+		The amber bands have too few FFT bins for a reliable reading, so the LF part of the rating may
+		be off. Raise the FFT size in Settings; the mid and high reading is fine as is.
 	</div>
 );
 
-/**
- * RC Mark II content: the level+quality headline, the under-resolved warning when it applies,
- * and the nine RC bands against the reference line.
- */
-const RcContent = ({ result }: { result: RcResult }) => (
-	<>
-		<RcHeadline result={result} />
-
-		{result.under_resolved && <UnderResolvedWarning />}
-
-		<div className="grid grid-cols-9 gap-1">
-			{RC_OCTAVE_BAND_HZ.map((hz, i) => (
-				<RcBandCell
-					key={hz}
-					hz={hz}
-					levelDb={result.band_levels_db[i]}
-					referenceDb={result.reference_db[i]}
-					bins={result.bins_per_band[i]}
-					minBins={result.min_bins_per_band}
-				/>
-			))}
-		</div>
-
-		<p className="text-[11px] leading-snug text-muted-foreground">
-			This is a measured value, not a certified compliance rating — treat it as a field estimate
-			against the RC Mark II reference line, not a substitute for calibrated acoustical testing.
-		</p>
-	</>
-);
+const RcContent = ({ result }: { result: RcResult }) => {
+	const info = RC_QUALITY_INFO[result.quality];
+	const typical = typicalFor(result.level);
+	return (
+		<>
+			<Headline
+				title={`RC-${Math.round(result.level)} (${info.code})`}
+				detail={`${info.meaning[0]?.toUpperCase()}${info.meaning.slice(1)}.${typical ? ` Level typical for ${typical}.` : ""}`}
+			/>
+			{result.under_resolved && <UnderResolvedWarning />}
+			<BandChart
+				bands={RC_OCTAVE_BAND_HZ}
+				levels={result.band_levels_db}
+				curve={result.reference_db}
+				curveLabel="RC reference line"
+				markOver={false}
+				thinBands={result.bins_per_band.map((bins) => bins < result.min_bins_per_band)}
+			/>
+		</>
+	);
+};
 
 /**
- * Shows a room criteria rating: the tangency rating, the octave band that determined it,
- * every measured octave band against the selected curve, and the family selector.
- *
- * RC Mark II is not a tangency rating (see `RcResult`), so selecting it swaps in `RcContent`
- * instead: a level+quality headline, an under-resolved warning when the low bands lack FFT
- * bins, and RC's own nine-band grid rather than the NC/NR eight.
- *
- * Layout: this panel declares its own minimum height rather than a `min-h-0` that relies on
- * an ancestor. There is no ResizeObserver here — the content is a fixed grid, not a chart, so
- * it never needs one.
+ * Room criteria: how loud a room's steady background noise is (air conditioning, traffic,
+ * equipment), as a single number. The rating is the lowest standard curve that every octave
+ * band stays under, so lower is quieter, and the chart shows which band sets it.
  */
 export const RoomCriteriaPanel = ({
 	family,
@@ -195,19 +243,22 @@ export const RoomCriteriaPanel = ({
 	const isRc = selectedFamily === "rc";
 
 	return (
-		<section
-			data-testid="room-criteria-panel"
-			className="glass flex min-h-[260px] flex-col gap-3 rounded-lg p-4"
-		>
-			<div className="flex items-center justify-between gap-3">
-				<h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-					Room Criteria
-				</h2>
+		<section data-testid="room-criteria-panel" className="flex h-full min-h-0 flex-col gap-3">
+			<div className="flex flex-shrink-0 items-start justify-between gap-4">
+				<div className="flex flex-col gap-1">
+					<h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+						Room Criteria
+					</h2>
+					<p className="max-w-prose text-xs text-muted-foreground">
+						Rates a room's steady background noise, such as air conditioning or traffic, with the
+						generator off. Lower is quieter. Needs a calibrated microphone.
+					</p>
+				</div>
 				<select
 					aria-label="Curve family"
 					value={selectedFamily}
 					onChange={(e) => onFamilyChange(e.target.value as RoomCriteriaFamily)}
-					className="rounded border border-border bg-card px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+					className="flex-shrink-0 rounded border border-border bg-card px-2 py-1 text-xs text-foreground"
 				>
 					{FAMILY_OPTIONS.map((option) => (
 						<option key={option.value} value={option.value}>
@@ -221,33 +272,17 @@ export const RoomCriteriaPanel = ({
 				rcResult ? (
 					<RcContent result={rcResult} />
 				) : (
-					<p className="text-xs text-muted-foreground">No measurement yet.</p>
+					<p className="text-sm text-muted-foreground">Start the stream to rate the room.</p>
 				)
 			) : result ? (
-				<>
-					<RatingHeadline result={result} />
-
-					<div className="grid grid-cols-8 gap-1">
-						{OCTAVE_BAND_HZ.map((hz, i) => (
-							<BandCell
-								key={hz}
-								hz={hz}
-								levelDb={result.band_levels_db[i]}
-								curveDb={result.curve_db[i]}
-								isDeterminingBand={hz === result.exceeded_band_hz}
-							/>
-						))}
-					</div>
-
-					<p className="text-[11px] leading-snug text-muted-foreground">
-						This is a measured value, not a certified compliance rating — treat it as a field
-						estimate against the {result.family.toUpperCase()} curve, not a substitute for
-						calibrated acoustical testing.
-					</p>
-				</>
+				<TangencyContent result={result} />
 			) : (
-				<p className="text-xs text-muted-foreground">No measurement yet.</p>
+				<p className="text-sm text-muted-foreground">Start the stream to rate the room.</p>
 			)}
+
+			<p className="flex-shrink-0 text-xs text-muted-foreground">
+				A measured value for field use, not a certified acoustic test.
+			</p>
 		</section>
 	);
 };

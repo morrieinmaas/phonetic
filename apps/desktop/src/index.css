@@ -16,6 +16,8 @@
 	--color-accent-foreground: oklch(0.98 0.01 260);
 	--color-border: oklch(0.44 0.022 260);
 	--color-ring: oklch(0.7 0.15 280);
+	--color-destructive: oklch(0.68 0.2 25);
+	--color-popover: oklch(0.23 0.014 260);
 }
 
 /* Additional custom properties for non-Tailwind usage */
@@ -35,6 +37,8 @@
 	--color-accent-foreground: oklch(0.98 0.01 260);
 	--color-border: oklch(0.44 0.022 260);
 	--color-ring: oklch(0.7 0.15 280);
+	--color-destructive: oklch(0.68 0.2 25);
+	--color-popover: oklch(0.23 0.014 260);
 
 	/* Spectrum gradient colors */
 	--color-spectrum-low: oklch(0.6 0.25 280);
@@ -64,6 +68,8 @@
 	--color-accent-foreground: oklch(0.98 0.01 260);
 	--color-border: oklch(0.84 0.012 260);
 	--color-ring: oklch(0.55 0.2 280);
+	--color-destructive: oklch(0.55 0.22 25);
+	--color-popover: oklch(1 0 0);
 }
 
 /* Base styles */
@@ -136,19 +142,6 @@ body {
 .light .glass {
 	background: oklch(1 0 0 / 0.95);
 	border: 1px solid oklch(0 0 0 / 0.14);
-}
-
-/* Gradient text */
-.gradient-text {
-	background: linear-gradient(
-		135deg,
-		var(--color-spectrum-low),
-		var(--color-spectrum-mid),
-		var(--color-spectrum-high)
-	);
-	-webkit-background-clip: text;
-	-webkit-text-fill-color: transparent;
-	background-clip: text;
 }
 
 /* uPlot styling overrides for professional audio appearance */

@@ -1,13 +1,13 @@
 import { save } from "@tauri-apps/plugin-dialog";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
-import { ChannelMatrix } from "./components/channel-matrix";
 import { ChannelSelector } from "./components/channel-selector";
 import { DeviceSelector } from "./components/device-selector";
 import { DiagnosticsBanner } from "./components/diagnostics-banner";
 import { GeneratorControls } from "./components/generator-controls";
 import { LeqPanel } from "./components/leq-panel";
 import type { LeqPanelMetrics } from "./components/leq-panel";
+import { MeasurementList } from "./components/measurement-list";
 import { PermissionDialog } from "./components/permission-dialog";
 import { RoomCriteriaPanel } from "./components/room-criteria-panel";
 import { SessionControls } from "./components/session-controls";
@@ -17,6 +17,7 @@ import { SpectrumAnalyzer } from "./components/spectrum-analyzer";
 import { StatusBar } from "./components/status-bar";
 import { TransferFunctionDisplay } from "./components/transfer-function-display";
 import { ThemeToggle } from "./components/ui/theme-toggle";
+import { UpdateNotice } from "./components/update-notice";
 import { WebGLSpectrum } from "./components/webgl-spectrum";
 import { createPollLoop } from "./lib/poll-loop";
 import { audioApi } from "./services/audio-api";
@@ -45,8 +46,7 @@ const SECONDARY_VIEWS: readonly SecondaryView[] = [
 const SECONDARY_VIEW_LABELS: Record<SecondaryView, string> = {
 	transfer: "Transfer Function",
 	spectrogram: "Spectrogram",
-	matrix: "Channel Matrix",
-
+	matrix: "Measurements",
 	leq: "Noise Dose",
 	room: "Room Criteria",
 };
@@ -93,6 +93,8 @@ export const App = () => {
 	const [permissionDialogOpen, setPermissionDialogOpen] = useState(false);
 	const [routing, setRoutingState] = useState<Routing>({ pairs: [] });
 	const [isMultiWindow, setIsMultiWindow] = useState(false);
+	// Which measurement the Transfer Function view shows; null is the sidebar channel.
+	const [viewedPairId, setViewedPairId] = useState<string | null>(null);
 
 	// LEQ / noise dose state. Polled only while the LEQ view is visible and
 	// the stream is running (see the effect below) -- an un-awaited IPC call
@@ -238,6 +240,9 @@ export const App = () => {
 		);
 	}, [secondaryView]);
 
+	const viewedPair = routing.pairs.find((pair) => pair.id === viewedPairId && pair.enabled);
+	const liveViewedPairId = viewedPair ? viewedPair.id : null;
+
 	const handleRoutingChange = async (next: Routing) => {
 		const previous = routing;
 		setRoutingState(next);
@@ -295,12 +300,12 @@ export const App = () => {
 
 		return createPollLoop(
 			async () => {
-				await Promise.all([fetchSpectrum(), fetchTransferFunction()]);
+				await Promise.all([fetchSpectrum(), fetchTransferFunction(liveViewedPairId)]);
 			},
 			(callback) => requestAnimationFrame(callback),
 			(handle) => cancelAnimationFrame(handle),
 		);
-	}, [audioState?.is_running, fetchSpectrum, fetchTransferFunction]);
+	}, [audioState?.is_running, fetchSpectrum, fetchTransferFunction, liveViewedPairId]);
 
 	// Room criteria polling loop.
 	//
@@ -379,6 +384,10 @@ export const App = () => {
 				isRunning={isRunning}
 				onResetAveraging={resetAveraging}
 				sampleRate={audioState?.sample_rate ?? 48000}
+				sources={routing.pairs.filter((pair) => pair.enabled)}
+				sourceId={liveViewedPairId}
+				onSourceChange={setViewedPairId}
+				sidebarChannel={measurementChannel}
 			/>
 		),
 		spectrogram: (
@@ -390,10 +399,12 @@ export const App = () => {
 			/>
 		),
 		matrix: (
-			<ChannelMatrix
+			<MeasurementList
 				routing={routing}
 				channelCount={inputChannelCount}
 				onChange={handleRoutingChange}
+				viewedPairId={liveViewedPairId}
+				onView={setViewedPairId}
 				isMultiWindow={isMultiWindow}
 			/>
 		),
@@ -424,7 +435,7 @@ export const App = () => {
 		<div className="flex h-screen overflow-hidden flex-col bg-background text-foreground">
 			{/* Header */}
 			<header className="glass sticky top-0 z-50 flex h-14 items-center justify-between border-b px-4">
-				<h1 className="gradient-text text-xl font-bold tracking-tight">Phonetic</h1>
+				<h1 className="text-lg font-semibold tracking-tight text-foreground">Phonetic</h1>
 				<div className="flex items-center gap-2">
 					<SessionControls />
 					<button
@@ -462,9 +473,8 @@ export const App = () => {
 				aria-live="polite"
 				className="pointer-events-none fixed right-4 top-16 z-40 flex w-full max-w-sm flex-col gap-2"
 			>
-				<div className="pointer-events-auto contents">
-					<DiagnosticsBanner />
-				</div>
+				<DiagnosticsBanner />
+				<UpdateNotice />
 			</div>
 
 			{/* Main content */}
@@ -550,9 +560,21 @@ export const App = () => {
 								<button
 									type="button"
 									onClick={clearError}
-									className="text-red-400 hover:text-red-300"
+									aria-label="Dismiss error"
+									className="rounded p-0.5 text-red-400 hover:bg-red-500/10 hover:text-red-300"
 								>
-									×
+									<svg
+										aria-hidden="true"
+										width="14"
+										height="14"
+										viewBox="0 0 24 24"
+										fill="none"
+										stroke="currentColor"
+										strokeWidth="2.5"
+										strokeLinecap="round"
+									>
+										<path d="M18 6 6 18M6 6l12 12" />
+									</svg>
 								</button>
 							</div>
 						</div>

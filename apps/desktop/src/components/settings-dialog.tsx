@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { binCount, windowLengthMs } from "../lib/fft-window";
 import { type AudioState, audioApi } from "../services/audio-api";
+import { useUpdateStore } from "../stores/update-store";
 import type { SmoothingFraction } from "../types/audio";
 
 interface SettingsDialogProps {
@@ -51,6 +52,14 @@ export const SettingsDialog = ({
 	useEffect(() => {
 		setSelectedFftSize(currentFftSize);
 	}, [currentFftSize]);
+
+	// Escape closes from anywhere in the dialog, not only when the backdrop has focus.
+	useEffect(() => {
+		if (!isOpen) return;
+		const onKey = (event: KeyboardEvent) => event.key === "Escape" && onClose();
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [isOpen, onClose]);
 
 	if (!isOpen) return null;
 
@@ -370,7 +379,8 @@ export const SettingsDialog = ({
 				</div>
 
 				{/* Footer */}
-				<div className="flex flex-shrink-0 justify-end p-4 border-t border-border">
+				<div className="flex flex-shrink-0 items-center justify-between gap-4 p-4 border-t border-border">
+					<UpdateStatus />
 					<button
 						type="button"
 						onClick={onClose}
@@ -380,6 +390,41 @@ export const SettingsDialog = ({
 					</button>
 				</div>
 			</div>
+		</div>
+	);
+};
+
+const UPDATE_STATUS_TEXT = {
+	idle: "",
+	checking: "Checking…",
+	current: "You have the latest version.",
+	available: "",
+	failed: "Could not reach GitHub. Check the connection.",
+} as const;
+
+/** Version line with a manual update check, for operators who dismissed the launch notice. */
+const UpdateStatus = () => {
+	const { currentVersion, status, update, check } = useUpdateStore();
+	const message =
+		status === "available" && update
+			? `Version ${update.version} is available.`
+			: UPDATE_STATUS_TEXT[status];
+
+	return (
+		<div className="flex min-w-0 items-center gap-3 text-xs text-muted-foreground">
+			<span className="whitespace-nowrap">Phonetic {currentVersion ?? ""}</span>
+			<button
+				type="button"
+				onClick={() => {
+					useUpdateStore.setState({ noticeHidden: false });
+					void check(true);
+				}}
+				disabled={status === "checking"}
+				className="whitespace-nowrap rounded border border-border px-2 py-1 text-foreground hover:bg-muted disabled:opacity-50"
+			>
+				Check for updates
+			</button>
+			<output className="min-w-0">{message}</output>
 		</div>
 	);
 };

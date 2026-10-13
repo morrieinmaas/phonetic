@@ -34,6 +34,9 @@ interface AudioStore {
 	inputChannelCount: number;
 	measurementChannel: number;
 
+	/** Delay currently compensated in the transfer function, in samples. */
+	appliedDelaySamples: number;
+
 	// Actions
 	fetchDevices: () => Promise<void>;
 	fetchAudioState: () => Promise<void>;
@@ -47,11 +50,15 @@ interface AudioStore {
 	setGeneratorAmplitude: (amplitude: number) => void;
 	setGeneratorType: (type: SignalType) => void;
 	fetchSpectrum: () => Promise<void>;
-	fetchTransferFunction: () => Promise<void>;
+	/** Live transfer function: the sidebar channel, or one measurement when `pairId` is given. */
+	fetchTransferFunction: (pairId?: string | null) => Promise<void>;
 	resetAveraging: () => Promise<void>;
 	setFftSize: (size: number) => Promise<void>;
 	setInputChannelCount: (count: number) => Promise<void>;
 	setMeasurementChannel: (index: number) => Promise<void>;
+	fetchAppliedDelay: () => Promise<void>;
+	/** Compensate `samples` of delay; 0 removes the compensation. */
+	setAppliedDelay: (samples: number) => Promise<void>;
 	clearError: () => void;
 }
 
@@ -71,6 +78,7 @@ export const useAudioStore = create<AudioStore>((set, get) => ({
 	fftSize: 2048,
 	inputChannelCount: 1,
 	measurementChannel: 0,
+	appliedDelaySamples: 0,
 
 	// Actions
 	fetchDevices: async () => {
@@ -92,6 +100,24 @@ export const useAudioStore = create<AudioStore>((set, get) => ({
 		try {
 			const audioState = await audioApi.getState();
 			set({ audioState });
+		} catch (e) {
+			set({ error: e instanceof Error ? e.message : String(e) });
+		}
+	},
+
+	fetchAppliedDelay: async () => {
+		try {
+			set({ appliedDelaySamples: await audioApi.getTransferFunctionDelay() });
+		} catch {
+			// Keep the last known value; the next successful read corrects it.
+		}
+	},
+
+	setAppliedDelay: async (samples) => {
+		const clamped = Math.max(0, Math.round(samples));
+		try {
+			await audioApi.setTransferFunctionDelay(clamped);
+			set({ appliedDelaySamples: clamped });
 		} catch (e) {
 			set({ error: e instanceof Error ? e.message : String(e) });
 		}
@@ -195,9 +221,11 @@ export const useAudioStore = create<AudioStore>((set, get) => ({
 		}
 	},
 
-	fetchTransferFunction: async () => {
+	fetchTransferFunction: async (pairId) => {
 		try {
-			const transferFunctionData = await audioApi.getTransferFunction();
+			const transferFunctionData = pairId
+				? await audioApi.getPairTransferFunction(pairId)
+				: await audioApi.getTransferFunction();
 			set({ transferFunctionData });
 		} catch (_e) {
 			// Silent fail for transfer function polling

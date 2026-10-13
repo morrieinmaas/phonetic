@@ -52,6 +52,7 @@ pub fn run() {
             commands::is_multi_window,
             commands::set_smoothing,
             commands::get_diagnostics,
+            commands::get_platform,
             commands::set_input_channel_count,
             commands::set_measurement_channel,
             commands::get_routing,

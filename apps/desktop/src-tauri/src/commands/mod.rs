@@ -1010,3 +1010,65 @@ mod tests {
         assert!(result.is_ok(), "{result:?}");
     }
 }
+
+// ============================================================================
+// Platform (for picking the right update download)
+// ============================================================================
+
+/// Which installer fits this machine, so the update notice can offer the exact
+/// file instead of a list of twelve.
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+pub struct PlatformInfo {
+    /// "macos" or "linux".
+    pub os: &'static str,
+    /// "aarch64" or "x86_64".
+    pub arch: &'static str,
+    /// How Phonetic was installed on Linux: "appimage", "deb" or "rpm". None on macOS.
+    pub linux_package: Option<&'static str>,
+}
+
+/// A running AppImage sets `$APPIMAGE`; otherwise the distribution family
+/// decides between the .deb and the .rpm.
+fn linux_package(appimage: bool, debian: bool, redhat: bool) -> &'static str {
+    match (appimage, debian, redhat) {
+        (true, _, _) => "appimage",
+        (false, true, _) => "deb",
+        (false, false, true) => "rpm",
+        _ => "appimage",
+    }
+}
+
+#[tauri::command]
+pub fn get_platform() -> PlatformInfo {
+    let os = std::env::consts::OS;
+    let linux = (os == "linux").then(|| {
+        linux_package(
+            std::env::var_os("APPIMAGE").is_some(),
+            std::path::Path::new("/etc/debian_version").exists(),
+            std::path::Path::new("/etc/redhat-release").exists()
+                || std::path::Path::new("/etc/fedora-release").exists(),
+        )
+    });
+    PlatformInfo {
+        os,
+        arch: std::env::consts::ARCH,
+        linux_package: linux,
+    }
+}
+
+#[cfg(test)]
+mod platform_tests {
+    use super::linux_package;
+
+    #[test]
+    fn an_appimage_updates_as_an_appimage_even_on_debian() {
+        assert_eq!(linux_package(true, true, false), "appimage");
+    }
+
+    #[test]
+    fn package_installs_follow_the_distribution_family() {
+        assert_eq!(linux_package(false, true, false), "deb");
+        assert_eq!(linux_package(false, false, true), "rpm");
+        assert_eq!(linux_package(false, false, false), "appimage");
+    }
+}

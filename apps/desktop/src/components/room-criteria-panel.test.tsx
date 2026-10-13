@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { render, screen } from "@testing-library/react";
-import { RoomCriteriaPanel } from "./room-criteria-panel";
+import { RoomCriteriaPanel, typicalFor } from "./room-criteria-panel";
 
 const result = {
 	family: "nc" as const,
@@ -29,8 +29,9 @@ describe("RoomCriteriaPanel", () => {
 
 	it("shows every octave band, not a truncated subset", () => {
 		render(<RoomCriteriaPanel result={result} onFamilyChange={() => {}} />);
-		for (const hz of [63, 125, 250, 500, 1000, 2000, 4000, 8000]) {
-			expect(screen.getAllByText(new RegExp(String(hz))).length).toBeGreaterThan(0);
+		// Bands at and above 1 kHz are labelled the way engineers say them: 1k, 2k.
+		for (const label of ["63", "125", "250", "500", "1k", "2k", "4k", "8k"]) {
+			expect(screen.getByText(label)).toBeTruthy();
 		}
 	});
 
@@ -80,5 +81,13 @@ describe("RoomCriteriaPanel", () => {
 		);
 		expect(screen.getByText("16")).toBeTruthy();
 		expect(screen.getByText("31.5")).toBeTruthy();
+	});
+});
+
+describe("typicalFor", () => {
+	it("puts a rating in context and admits when it is louder than any listed room", () => {
+		expect(typicalFor(18)).toMatch(/studios/);
+		expect(typicalFor(35)).toMatch(/offices/);
+		expect(typicalFor(65)).toBeNull();
 	});
 });

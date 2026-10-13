@@ -34,7 +34,7 @@ export const EqControls = () => {
 						disabled={filters.length === 0}
 						className={`px-2 py-1 rounded border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
 							bypassed
-								? "border-border text-muted-foreground hover:bg-accent"
+								? "border-border text-muted-foreground hover:bg-muted"
 								: "border-primary bg-primary/10 text-primary"
 						}`}
 					>
@@ -44,7 +44,7 @@ export const EqControls = () => {
 						type="button"
 						data-testid="eq-add-filter"
 						onClick={addFilter}
-						className="px-2 py-1 rounded border border-border hover:bg-accent"
+						className="px-2 py-1 rounded border border-border hover:bg-muted"
 					>
 						+ Filter
 					</button>

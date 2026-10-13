@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { render, screen } from "@testing-library/react";
-import { LeqPanel } from "./leq-panel";
+import { LeqPanel, formatTimeToLimit } from "./leq-panel";
 
 const metrics = {
 	leq_db: 88.2,
@@ -68,6 +68,7 @@ describe("LeqPanel", () => {
 			/>,
 		);
 		expect(screen.getByText(/measured value/i)).toBeTruthy();
+		expect(screen.getByText(/editable presets/i)).toBeTruthy();
 	});
 
 	it("uses tabular figures so the readout does not jitter", () => {
@@ -79,5 +80,23 @@ describe("LeqPanel", () => {
 			/>,
 		);
 		expect(container.querySelectorAll(".tabular-nums").length).toBeGreaterThan(0);
+	});
+});
+
+describe("formatTimeToLimit", () => {
+	const dose = (projected: number) => ({
+		percent: 1,
+		projected_percent_at_reference: projected,
+		peak_exceeded: false,
+	});
+
+	it("says when the limit is reached at the current level", () => {
+		expect(formatTimeToLimit(dose(800), 8)).toBe("1 h 0 min");
+		expect(formatTimeToLimit(dose(1270), 8)).toBe("38 min");
+	});
+
+	it("says nothing when the limit is not reached within the period", () => {
+		expect(formatTimeToLimit(dose(80), 8)).toBeNull();
+		expect(formatTimeToLimit(dose(0), 8)).toBeNull();
 	});
 });

@@ -81,7 +81,7 @@ export const GeneratorControls = ({
 						className={`rounded-md px-3 py-2 text-xs font-medium transition-colors ${
 							signalType === value
 								? "bg-primary text-primary-foreground"
-								: "glass border border-border hover:bg-accent"
+								: "glass border border-border hover:bg-muted"
 						} disabled:cursor-not-allowed disabled:opacity-50`}
 					>
 						{label}

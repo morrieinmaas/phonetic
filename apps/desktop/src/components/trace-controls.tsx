@@ -1,6 +1,7 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { audioApi } from "../services/audio-api";
 import { applyMeasuredDelay } from "../services/delay-apply";
+import { useAudioStore } from "../stores/audio-store";
 import { useTraceStore } from "../stores/trace-store";
 import type { TraceSlot, TransferFunctionData } from "../types/audio";
 
@@ -23,23 +24,26 @@ export const TraceControls = ({ currentData, isRunning }: TraceControlsProps) =>
 	} = useTraceStore();
 	const [showList, setShowList] = useState(false);
 	const [delayInput, setDelayInput] = useState("");
-	const [delayStatus, setDelayStatus] = useState<"idle" | "applied" | "rejected">("idle");
-	const [appliedDelay, setAppliedDelay] = useState<number | null>(null);
+	const [delayRejected, setDelayRejected] = useState(false);
+	const appliedDelay = useAudioStore((state) => state.appliedDelaySamples);
+	const setAppliedDelay = useAudioStore((state) => state.setAppliedDelay);
+	const fetchAppliedDelay = useAudioStore((state) => state.fetchAppliedDelay);
+	const sampleRate = useAudioStore((state) => state.audioState?.sample_rate ?? 48000);
+
+	useEffect(() => {
+		void fetchAppliedDelay();
+	}, [fetchAppliedDelay]);
 	const [averageStatus, setAverageStatus] = useState<"idle" | "error">("idle");
 
 	const handleApplyDelay = useCallback(async () => {
 		const delaySamples = Number(delayInput);
-		const applied = await applyMeasuredDelay({
-			delay_samples: delaySamples,
-			is_valid: Number.isFinite(delaySamples),
-		});
-		if (applied) {
-			setAppliedDelay(delaySamples);
-			setDelayStatus("applied");
-		} else {
-			setDelayStatus("rejected");
-		}
-	}, [delayInput]);
+		const applied = await applyMeasuredDelay(
+			{ delay_samples: delaySamples, is_valid: Number.isInteger(delaySamples) },
+			setAppliedDelay,
+		);
+		setDelayRejected(!applied);
+		if (applied) setDelayInput("");
+	}, [delayInput, setAppliedDelay]);
 
 	const visibleTraces = traces.filter((trace) => trace.visible);
 
@@ -132,32 +136,76 @@ export const TraceControls = ({ currentData, isRunning }: TraceControlsProps) =>
 				})}
 			</div>
 
-			{/* Apply a measured delay to compensate the transfer function reference */}
-			<div className="flex items-center gap-1 ml-2 border-l border-border pl-2">
-				<span className="text-xs text-muted-foreground mr-1">Delay:</span>
+			{/* Delay compensation: what is applied now, a way to remove it, and a way
+			    to type a new value. Applying used to be one-way with no undo. */}
+			<div className="ml-2 flex items-center gap-1.5 border-l border-border pl-2">
+				<label htmlFor="delay-input" className="text-xs text-muted-foreground">
+					Delay
+				</label>
+				{appliedDelay > 0 && (
+					<span
+						data-testid="applied-delay"
+						className="flex items-center gap-1 rounded border border-primary/50 bg-primary/10 py-0.5 pl-2 pr-0.5 text-xs text-foreground"
+					>
+						<span className="font-mono tabular-nums">
+							{appliedDelay} smp · {((appliedDelay * 1000) / sampleRate).toFixed(2)} ms
+						</span>
+						<button
+							type="button"
+							data-testid="clear-delay"
+							onClick={() => void setAppliedDelay(0)}
+							aria-label="Remove delay compensation"
+							title="Remove delay compensation"
+							className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+						>
+							<svg
+								aria-hidden="true"
+								width="12"
+								height="12"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								strokeWidth="2.5"
+								strokeLinecap="round"
+							>
+								<path d="M18 6 6 18M6 6l12 12" />
+							</svg>
+						</button>
+					</span>
+				)}
 				<input
+					id="delay-input"
 					type="number"
 					min={0}
+					step={1}
 					value={delayInput}
-					onChange={(e) => setDelayInput(e.target.value)}
-					placeholder="samples"
-					className="w-16 px-1 py-0.5 text-xs rounded border border-border bg-background"
+					onChange={(e) => {
+						setDelayInput(e.target.value);
+						setDelayRejected(false);
+					}}
+					onKeyDown={(e) => {
+						if (e.key === "Enter" && delayInput !== "") void handleApplyDelay();
+					}}
+					placeholder={appliedDelay > 0 ? "new" : "samples"}
+					aria-invalid={delayRejected}
+					className={`w-20 rounded border bg-background px-1.5 py-0.5 text-xs ${
+						delayRejected ? "border-red-500" : "border-border"
+					}`}
 				/>
 				<button
 					type="button"
 					data-testid="apply-delay"
 					onClick={handleApplyDelay}
 					disabled={delayInput === ""}
-					title="Apply the measured delay to compensate the transfer function reference"
-					className="px-2 py-1 text-xs rounded border border-border hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed"
+					title="Delay the reference by this many samples so it lines up with the measurement"
+					className="rounded border border-border px-2 py-1 text-xs hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
 				>
 					Apply
 				</button>
-				{delayStatus === "applied" && (
-					<span className="text-[10px] text-muted-foreground">Applied {appliedDelay} smp</span>
-				)}
-				{delayStatus === "rejected" && (
-					<span className="text-[10px] text-destructive">Invalid delay</span>
+				{delayRejected && (
+					<span role="alert" className="text-xs text-red-500">
+						Whole samples, 0 or more
+					</span>
 				)}
 			</div>
 
@@ -169,7 +217,7 @@ export const TraceControls = ({ currentData, isRunning }: TraceControlsProps) =>
 					onClick={handleAverageTraces}
 					disabled={visibleTraces.length === 0}
 					title="Average the currently visible traces in the complex domain"
-					className="px-2 py-1 text-xs rounded border border-border hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed"
+					className="px-2 py-1 text-xs rounded border border-border hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed"
 				>
 					Average selected
 				</button>
@@ -210,7 +258,7 @@ export const TraceControls = ({ currentData, isRunning }: TraceControlsProps) =>
 					<button
 						type="button"
 						onClick={() => setShowList(!showList)}
-						className="px-2 py-1 text-xs rounded border border-border hover:bg-accent"
+						className="px-2 py-1 text-xs rounded border border-border hover:bg-muted"
 					>
 						{traces.length} trace{traces.length !== 1 ? "s" : ""}
 					</button>
@@ -231,7 +279,7 @@ export const TraceControls = ({ currentData, isRunning }: TraceControlsProps) =>
 								{traces.map((trace) => (
 									<div
 										key={trace.id}
-										className="flex items-center gap-2 p-2 hover:bg-accent/50 group"
+										className="flex items-center gap-2 p-2 hover:bg-muted/60 group"
 									>
 										<button
 											type="button"
@@ -249,9 +297,21 @@ export const TraceControls = ({ currentData, isRunning }: TraceControlsProps) =>
 										<button
 											type="button"
 											onClick={() => deleteTrace(trace.id)}
-											className="opacity-0 group-hover:opacity-100 text-xs text-destructive hover:underline"
+											aria-label={`Delete ${trace.name}`}
+											className="rounded p-0.5 text-muted-foreground opacity-0 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
 										>
-											×
+											<svg
+												aria-hidden="true"
+												width="12"
+												height="12"
+												viewBox="0 0 24 24"
+												fill="none"
+												stroke="currentColor"
+												strokeWidth="2.5"
+												strokeLinecap="round"
+											>
+												<path d="M18 6 6 18M6 6l12 12" />
+											</svg>
 										</button>
 									</div>
 								))}
