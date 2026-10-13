@@ -41,6 +41,10 @@ Apple chip; "Processor ... Intel" means Intel. Not sure about Linux? Open a term
 
 Windows is not supported.
 
+**Updates.** Phonetic checks GitHub for a newer release when it starts and offers the installer
+for your machine. Install it the same way as the first time. Settings has a Check for updates
+button too.
+
 ### macOS
 
 Phonetic is not signed with an Apple Developer ID, because that costs 99 dollars a year for
@@ -112,10 +116,12 @@ PipeWire and PulseAudio both provide, so any audio interface your desktop can se
 - **Signal generator**: sine, pink noise, white noise, logarithmic sweep.
 - **SPL and calibration**: dBFS and calibrated dB SPL, `.cal` microphone files, sensitivity and
   preamp gain, A- and C-weighting, reference overlays (ISO 226, X-curve, house curve).
-- **Channel matrix**: up to 32 inputs, several measurement pairs at once, each with its own delay
-  and calibration offset, referenced to the generator or to another input.
-- **Room criteria**: NC (ANSI S12.2) and NR (ISO 1996) by the tangency method, plus RC Mark II.
-  Needs calibrated SPL.
+- **Measurements**: several microphone positions at once, each a named measurement with its own
+  input, reference (the generator or another input) and delay; pick which one the transfer
+  function shows.
+- **Room criteria**: NC (ANSI S12.2) and NR (ISO 1996) by the tangency method, plus RC Mark II,
+  drawn as octave bands against the rating curve with typical targets for comparison. Needs
+  calibrated SPL.
 - **Noise dose**: LEQ, LAeq, LCeq, LAFmax, LApeak, LCpeak with continuous CSV logging and exposure
   dose against editable limit presets (EU Directive 2003/10/EC action values ship as defaults).
 - **Sessions and export**: save and reload sessions; export CSV, JSON and Smaart-compatible TXT.
