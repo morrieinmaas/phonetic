@@ -1,13 +1,19 @@
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import uPlot from "uplot";
+import { useTheme } from "../lib/use-theme";
 import "uplot/dist/uPlot.min.css";
 import { useShallow } from "zustand/shallow";
 import { interpolatePhaseToLogScale } from "../lib/phase-interpolation";
 import {
 	type CursorSample,
+	FREQUENCY_SPLITS,
 	applyPan,
 	applyZoom,
+	dbSplits,
+	exactRange,
+	formatFrequencyTick,
+	keepAllSplits,
 	nearestIndex,
 	pixelToLogFrequency,
 } from "../lib/plot-scales";
@@ -16,6 +22,7 @@ import { useEqStore } from "../stores/eq-store";
 import { useTraceStore } from "../stores/trace-store";
 import type {
 	BiquadFilter,
+	MeasurementPair,
 	ReferenceCurve,
 	ReferenceCurveType,
 	StoredTrace,
@@ -32,6 +39,13 @@ interface TransferFunctionDisplayProps {
 	onResetAveraging: () => void;
 	/** Sample rate the virtual EQ's filter coefficients are computed against. */
 	sampleRate: number;
+	/** Measurements from the Measurements view that can be shown instead of the sidebar input. */
+	sources?: MeasurementPair[];
+	/** The measurement on screen, or null for the sidebar input against the generator. */
+	sourceId?: string | null;
+	onSourceChange?: (id: string | null) => void;
+	/** Zero-based sidebar input, named in the source picker. */
+	sidebarChannel?: number;
 }
 
 /** Maximum number of stored traces that can be displayed simultaneously */
@@ -39,6 +53,7 @@ const MAX_DISPLAYED_TRACES = 4;
 
 /** Full frequency range of the plot, and the limit that zoom/pan gestures cannot cross. */
 const FREQ_LIMITS: [number, number] = [20, 20000];
+const DEFAULT_MAG_RANGE: [number, number] = [-40, 20];
 
 const CURSOR_A_COLOR = "#f59e0b";
 const CURSOR_B_COLOR = "#d946ef";
@@ -116,12 +131,17 @@ export const TransferFunctionDisplay = ({
 	isRunning,
 	onResetAveraging,
 	sampleRate,
+	sources = [],
+	sourceId = null,
+	onSourceChange,
+	sidebarChannel = 0,
 }: TransferFunctionDisplayProps) => {
 	const containerRef = useRef<HTMLDivElement>(null);
 	const plotHostRef = useRef<HTMLDivElement>(null);
 	const chartRef = useRef<uPlot | null>(null);
 	const logFreqsRef = useRef<number[]>([]);
 	const xRangeRef = useRef<[number, number]>(FREQ_LIMITS);
+	const magRangeRef = useRef<[number, number]>(DEFAULT_MAG_RANGE);
 	const cursorsRef = useRef<{ a: CursorSample | null; b: CursorSample | null }>({
 		a: null,
 		b: null,
@@ -129,9 +149,7 @@ export const TransferFunctionDisplay = ({
 	const [cursorA, setCursorA] = useState<CursorSample | null>(null);
 	const [cursorB, setCursorB] = useState<CursorSample | null>(null);
 	const [autoZoom, setAutoZoom] = useState(true);
-	const [theme, setTheme] = useState<"dark" | "light">(() =>
-		document.documentElement.classList.contains("dark") ? "dark" : "light",
-	);
+	const theme = useTheme();
 	const [selectedRefCurve, setSelectedRefCurve] = useState<ReferenceCurveType | null>(null);
 	const [refCurveData, setRefCurveData] = useState<ReferenceCurve | null>(null);
 
@@ -193,15 +211,6 @@ export const TransferFunctionDisplay = ({
 			clearTimeout(timer);
 		};
 	}, [eqActive, eqSourceData, enabledEqFilters, sampleRate]);
-
-	// Watch for theme changes
-	useEffect(() => {
-		const observer = new MutationObserver(() => {
-			setTheme(document.documentElement.classList.contains("dark") ? "dark" : "light");
-		});
-		observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
-		return () => observer.disconnect();
-	}, []);
 
 	// Initialize log frequencies
 	useEffect(() => {
@@ -283,10 +292,14 @@ export const TransferFunctionDisplay = ({
 					log: 10,
 					min: xRangeRef.current[0],
 					max: xRangeRef.current[1],
+					range: exactRange,
 				},
+				// Auto-zoom writes magRangeRef; the range function hands it to uPlot on
+				// every setData. Mutating scale.min/max directly was overwritten by
+				// uPlot and left the magnitude trace off the plot.
 				magnitude: {
-					auto: false,
-					range: [-40, 20],
+					auto: true,
+					range: () => magRangeRef.current,
 				},
 				phase: {
 					auto: false,
@@ -304,12 +317,9 @@ export const TransferFunctionDisplay = ({
 					ticks: { stroke: tickColor, width: 1, size: 6 },
 					size: 45,
 					gap: 8,
-					splits: [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000],
-					values: (_, ticks) =>
-						ticks.map((v) => {
-							if (v >= 1000) return `${(v / 1000).toFixed(0)}k`;
-							return String(Math.round(v));
-						}),
+					splits: FREQUENCY_SPLITS,
+					filter: keepAllSplits,
+					values: (_, ticks) => ticks.map(formatFrequencyTick),
 				},
 				{
 					label: "Magnitude (dB)",
@@ -325,7 +335,7 @@ export const TransferFunctionDisplay = ({
 					size: 72,
 					gap: 8,
 					scale: "magnitude",
-					splits: [-40, -30, -20, -10, 0, 10, 20],
+					splits: () => dbSplits(...magRangeRef.current),
 				},
 				{
 					side: 1,
@@ -547,28 +557,19 @@ export const TransferFunctionDisplay = ({
 			const trace = visibleTraces[i];
 			chartData.push(trace ? getTraceValues(trace) : new Array(numPoints).fill(null));
 		}
+		if (autoZoom) {
+			// Combine all visible magnitude data for scale calculation
+			const allMagnitudes = [
+				...(data && isRunning ? logMagnitude : []),
+				...predictedValues,
+				...visibleTraces.flatMap((t) => getTraceValues(t)),
+			].filter((v): v is number => v !== null);
 
-		// Auto-zoom: calculate appropriate scale bounds considering all visible data
-		const magnitudeScale = chartRef.current.scales.magnitude;
-		if (magnitudeScale) {
-			if (autoZoom) {
-				// Combine all visible magnitude data for scale calculation
-				const allMagnitudes = [
-					...(data && isRunning ? logMagnitude : []),
-					...predictedValues,
-					...visibleTraces.flatMap((t) => getTraceValues(t)),
-				].filter((v): v is number => v !== null);
-
-				if (allMagnitudes.length > 0) {
-					const [magMin, magMax] = calculateScaleBounds(allMagnitudes);
-					magnitudeScale.min = magMin;
-					magnitudeScale.max = magMax;
-				}
-			} else {
-				// Fixed scale
-				magnitudeScale.min = -40;
-				magnitudeScale.max = 20;
+			if (allMagnitudes.length > 0) {
+				magRangeRef.current = calculateScaleBounds(allMagnitudes);
 			}
+		} else {
+			magRangeRef.current = DEFAULT_MAG_RANGE;
 		}
 
 		chartRef.current.setData(chartData);
@@ -597,9 +598,30 @@ export const TransferFunctionDisplay = ({
 		<div className="flex h-full min-h-0 flex-col gap-2">
 			{/* Identity and live measurement quality */}
 			<div className="flex flex-shrink-0 items-center justify-between gap-3">
-				<h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-					Transfer Function
-				</h2>
+				<div className="flex min-w-0 items-center gap-3">
+					<h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+						Transfer Function
+					</h2>
+					{sources.length > 0 && onSourceChange ? (
+						<select
+							aria-label="Measurement shown"
+							value={sourceId ?? ""}
+							onChange={(e) => onSourceChange(e.target.value || null)}
+							className="max-w-56 truncate rounded border border-border bg-card px-1.5 py-1 text-xs text-foreground"
+						>
+							<option value="">Input {sidebarChannel + 1} vs generator</option>
+							{sources.map((pair) => (
+								<option key={pair.id} value={pair.id}>
+									{pair.name}
+								</option>
+							))}
+						</select>
+					) : (
+						<span className="text-xs text-muted-foreground">
+							Input {sidebarChannel + 1} vs generator
+						</span>
+					)}
+				</div>
 				<div className="flex items-center gap-3">
 					{isRunning && data && (
 						<div className="flex items-center gap-2">
@@ -640,7 +662,7 @@ export const TransferFunctionDisplay = ({
 						className={`px-2 py-1 text-xs rounded border transition-colors ${
 							autoZoom
 								? "border-primary bg-primary/10 text-primary"
-								: "border-border hover:bg-accent"
+								: "border-border hover:bg-muted"
 						}`}
 					>
 						Auto Zoom
@@ -649,7 +671,7 @@ export const TransferFunctionDisplay = ({
 						type="button"
 						onClick={onResetAveraging}
 						disabled={!isRunning}
-						className="px-2 py-1 text-xs rounded border border-border hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed"
+						className="px-2 py-1 text-xs rounded border border-border hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed"
 					>
 						Reset Avg
 					</button>
@@ -686,45 +708,47 @@ export const TransferFunctionDisplay = ({
 					</div>
 				)}
 			</div>
-			<div className="mt-2 flex-shrink-0">
+			{/* Cursor readout and legend share one row: on their own rows they took
+			    the height the plot needs. */}
+			<div className="flex flex-shrink-0 flex-wrap items-center justify-between gap-x-6 gap-y-1">
 				<CursorReadout cursorA={cursorA} cursorB={cursorB} />
-			</div>
-			<div className="flex gap-4 mt-2 text-xs text-muted-foreground flex-shrink-0 flex-wrap">
-				<span className="flex items-center gap-1">
-					<span className="w-4 h-0.5 bg-[oklch(0.7_0.15_280)]" />
-					Live
-				</span>
-				<span className="flex items-center gap-1">
-					<span
-						className="w-4 h-0.5 bg-[oklch(0.7_0.15_200)] border-dashed"
-						style={{ borderTopWidth: 1 }}
-					/>
-					Phase
-				</span>
-				{refCurveData && (
+				<div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
+					<span className="flex items-center gap-1">
+						<span className="w-4 h-0.5 bg-[oklch(0.7_0.15_280)]" />
+						Live
+					</span>
 					<span className="flex items-center gap-1">
 						<span
-							className="w-4 h-0.5 bg-[oklch(0.6_0.15_120)] border-dashed"
+							className="w-4 h-0.5 bg-[oklch(0.7_0.15_200)] border-dashed"
 							style={{ borderTopWidth: 1 }}
 						/>
-						{refCurveData.name}
+						Phase
 					</span>
-				)}
-				{eqActive && predictedData && (
-					<span className="flex items-center gap-1">
-						<span
-							className="w-4 h-0.5 bg-[oklch(0.55_0.2_30)] border-dashed"
-							style={{ borderTopWidth: 1 }}
-						/>
-						Predicted (EQ)
-					</span>
-				)}
-				{visibleTraces.map((trace) => (
-					<span key={trace.id} className="flex items-center gap-1">
-						<span className="w-4 h-0.5" style={{ backgroundColor: trace.color }} />
-						{trace.name}
-					</span>
-				))}
+					{refCurveData && (
+						<span className="flex items-center gap-1">
+							<span
+								className="w-4 h-0.5 bg-[oklch(0.6_0.15_120)] border-dashed"
+								style={{ borderTopWidth: 1 }}
+							/>
+							{refCurveData.name}
+						</span>
+					)}
+					{eqActive && predictedData && (
+						<span className="flex items-center gap-1">
+							<span
+								className="w-4 h-0.5 bg-[oklch(0.55_0.2_30)] border-dashed"
+								style={{ borderTopWidth: 1 }}
+							/>
+							Predicted (EQ)
+						</span>
+					)}
+					{visibleTraces.map((trace) => (
+						<span key={trace.id} className="flex items-center gap-1">
+							<span className="w-4 h-0.5" style={{ backgroundColor: trace.color }} />
+							{trace.name}
+						</span>
+					))}
+				</div>
 			</div>
 		</div>
 	);

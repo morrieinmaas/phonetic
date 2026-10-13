@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { applyPan, applyZoom, pixelToLogFrequency } from "../lib/plot-scales";
+import { useTheme } from "../lib/use-theme";
 
 interface WebGLSpectrumProps {
 	spectrumData: number[];
@@ -184,18 +185,7 @@ export const WebGLSpectrum = ({
 	const skipPeakUntilRef = useRef(0); // Timestamp until which to skip peak updates
 
 	// Theme detection
-	const [theme, setTheme] = useState<"dark" | "light">(() =>
-		document.documentElement.classList.contains("dark") ? "dark" : "light",
-	);
-
-	// Watch for theme changes
-	useEffect(() => {
-		const observer = new MutationObserver(() => {
-			setTheme(document.documentElement.classList.contains("dark") ? "dark" : "light");
-		});
-		observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
-		return () => observer.disconnect();
-	}, []);
+	const theme = useTheme();
 
 	const themeColors = THEME_COLORS[theme];
 
@@ -252,10 +242,6 @@ export const WebGLSpectrum = ({
 			waterfallDataRef.current = new Float32Array(512 * WATERFALL_ROWS);
 		}
 
-		// Set initial clear color
-		const [r, g, b] = THEME_COLORS.dark.background;
-		gl.clearColor(r, g, b, 1.0);
-
 		// Enable blending for smooth lines
 		gl.enable(gl.BLEND);
 		gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
@@ -278,8 +264,14 @@ export const WebGLSpectrum = ({
 
 		if (!canvas || !gl || !program) return;
 
-		// If no spectrum data, just clear the peak canvas and return
-		if (spectrumData.length === 0) {
+		// No live data: paint an empty plot in the current theme. Returning without
+		// clearing left the last frame, or the black default canvas, on screen
+		// after a theme switch, because nothing else triggers a repaint.
+		if (spectrumData.length === 0 || !isRunning) {
+			const [br, bg, bb] = themeColors.background;
+			gl.viewport(0, 0, canvas.width, canvas.height);
+			gl.clearColor(br, bg, bb, 1.0);
+			gl.clear(gl.COLOR_BUFFER_BIT);
 			if (peakCanvas) {
 				const ctx = peakCanvas.getContext("2d");
 				if (ctx) ctx.clearRect(0, 0, peakCanvas.width, peakCanvas.height);
@@ -427,7 +419,7 @@ export const WebGLSpectrum = ({
 				ctx.clearRect(0, 0, peakCanvas.width, peakCanvas.height);
 			}
 		}
-	}, [spectrumData, sampleRate, fftSize, themeColors, peakHoldEnabled]);
+	}, [spectrumData, sampleRate, fftSize, themeColors, peakHoldEnabled, isRunning]);
 
 	// Handle resize
 	useEffect(() => {
@@ -449,18 +441,22 @@ export const WebGLSpectrum = ({
 					peakCanvas.style.height = `${height}px`;
 				}
 			}
+			// Resizing a canvas wipes it; repaint rather than wait for the next frame.
+			renderRef.current();
 		});
 
 		resizeObserver.observe(canvas);
 		return () => resizeObserver.disconnect();
 	}, []);
 
-	// Render on data change
+	// Render on data, theme or run-state change. renderSpectrum paints the idle
+	// state too, so a theme switch with the stream stopped repaints at once.
+	const renderRef = useRef(renderSpectrum);
+	renderRef.current = renderSpectrum;
 	useEffect(() => {
-		if (isRunning && spectrumData.length > 0) {
-			requestAnimationFrame(renderSpectrum);
-		}
-	}, [spectrumData, isRunning, renderSpectrum]);
+		const frame = requestAnimationFrame(renderSpectrum);
+		return () => cancelAnimationFrame(frame);
+	}, [renderSpectrum]);
 
 	// Trackpad gestures: ctrl+wheel pinch zooms about the pointer, plain wheel pans.
 	useEffect(() => {
@@ -509,7 +505,7 @@ export const WebGLSpectrum = ({
 						className={`px-2 py-1 text-xs rounded border transition-colors ${
 							peakHoldEnabled
 								? "border-primary bg-primary/10 text-primary"
-								: "border-border hover:bg-accent"
+								: "border-border hover:bg-muted"
 						}`}
 					>
 						Peak Hold
@@ -518,7 +514,7 @@ export const WebGLSpectrum = ({
 						<button
 							type="button"
 							onClick={clearPeakHold}
-							className="px-2 py-1 text-xs rounded border border-border hover:bg-accent"
+							className="px-2 py-1 text-xs rounded border border-border hover:bg-muted"
 						>
 							Clear
 						</button>
@@ -604,9 +600,10 @@ export const WebGLSpectrum = ({
 							</span>
 						);
 					})}
-					{GRID_DECIBELS.map((db, index) => {
+					{/* The floor label is dropped: it sits in the same corner as the
+					    20 Hz label and the two overprinted each other. */}
+					{GRID_DECIBELS.slice(0, -1).map((db, index) => {
 						const isTop = index === 0;
-						const isBottom = index === GRID_DECIBELS.length - 1;
 						return (
 							<span
 								key={`dl-${db}`}
@@ -614,11 +611,7 @@ export const WebGLSpectrum = ({
 								style={{
 									left: 6,
 									top: `${dbToPercent(db)}%`,
-									transform: isTop
-										? "translateY(2px)"
-										: isBottom
-											? "translateY(calc(-100% - 2px))"
-											: "translateY(-50%)",
+									transform: isTop ? "translateY(2px)" : "translateY(-50%)",
 									color: themeColors.labelFill,
 								}}
 							>

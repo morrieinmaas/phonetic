@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import uPlot from "uplot";
+import {
+	FREQUENCY_SPLITS,
+	exactRange,
+	formatFrequencyTick,
+	keepAllSplits,
+} from "../lib/plot-scales";
+import { useTheme } from "../lib/use-theme";
 import "uplot/dist/uPlot.min.css";
 
 interface SpectrumAnalyzerProps {
@@ -49,18 +56,7 @@ export const SpectrumAnalyzer = ({
 	const peakHoldRef = useRef<number[]>([]);
 	const [peakHoldEnabled, setPeakHoldEnabled] = useState(true);
 	const skipPeakUntilRef = useRef(0); // Timestamp until which to skip peak updates
-	const [theme, setTheme] = useState<"dark" | "light">(() =>
-		document.documentElement.classList.contains("dark") ? "dark" : "light",
-	);
-
-	// Watch for theme changes
-	useEffect(() => {
-		const observer = new MutationObserver(() => {
-			setTheme(document.documentElement.classList.contains("dark") ? "dark" : "light");
-		});
-		observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
-		return () => observer.disconnect();
-	}, []);
+	const theme = useTheme();
 
 	// Initialize log frequencies and peak hold
 	useEffect(() => {
@@ -100,10 +96,11 @@ export const SpectrumAnalyzer = ({
 			scales: {
 				x: {
 					time: false,
-					distr: 2,
+					distr: 3,
 					log: 10,
 					min: 20,
 					max: 20000,
+					range: exactRange,
 				},
 				y: {
 					auto: false,
@@ -121,12 +118,9 @@ export const SpectrumAnalyzer = ({
 					ticks: { stroke: tickColor, width: 1, size: 6 },
 					size: 45,
 					gap: 8,
-					splits: [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000],
-					values: (_, ticks) =>
-						ticks.map((v) => {
-							if (v >= 1000) return `${(v / 1000).toFixed(0)}k`;
-							return String(Math.round(v));
-						}),
+					splits: FREQUENCY_SPLITS,
+					filter: keepAllSplits,
+					values: (_, ticks) => ticks.map(formatFrequencyTick),
 				},
 				{
 					label: "dB",
@@ -147,6 +141,7 @@ export const SpectrumAnalyzer = ({
 					label: "Magnitude",
 					stroke: isDark ? "oklch(0.75 0.18 280)" : "oklch(0.55 0.2 280)",
 					width: 2,
+					fillTo: -120,
 					fill: isDark ? "oklch(0.75 0.18 280 / 0.15)" : "oklch(0.55 0.2 280 / 0.15)",
 				},
 				{
@@ -237,6 +232,7 @@ export const SpectrumAnalyzer = ({
 				<div className="flex items-center gap-2">
 					<button
 						type="button"
+						aria-pressed={peakHoldEnabled}
 						onClick={() => {
 							setPeakHoldEnabled(!peakHoldEnabled);
 							if (peakHoldEnabled) clearPeakHold();
@@ -244,7 +240,7 @@ export const SpectrumAnalyzer = ({
 						className={`px-2 py-1 text-xs rounded border transition-colors ${
 							peakHoldEnabled
 								? "border-primary bg-primary/10 text-primary"
-								: "border-border hover:bg-accent"
+								: "border-border hover:bg-muted"
 						}`}
 					>
 						Peak Hold
@@ -253,7 +249,7 @@ export const SpectrumAnalyzer = ({
 						<button
 							type="button"
 							onClick={clearPeakHold}
-							className="px-2 py-1 text-xs rounded border border-border hover:bg-accent"
+							className="px-2 py-1 text-xs rounded border border-border hover:bg-muted"
 						>
 							Clear
 						</button>

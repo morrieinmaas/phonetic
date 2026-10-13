@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { magnitudeToRgb } from "../lib/colormap";
 import { type SpectrogramBuffer, createSpectrogramBuffer } from "../lib/spectrogram-buffer";
 import { fillSpectrogramPixels } from "../lib/spectrogram-render";
+import { useTheme } from "../lib/use-theme";
 
 interface SpectrogramDisplayProps {
 	spectrumData: number[];
@@ -57,21 +58,10 @@ export const SpectrogramDisplay = ({
 	const [minDb, setMinDb] = useState(DEFAULT_MIN_DB);
 	const [maxDb, setMaxDb] = useState(DEFAULT_MAX_DB);
 	const [isPaused, setIsPaused] = useState(false);
-	const [theme, setTheme] = useState<"dark" | "light">(() =>
-		document.documentElement.classList.contains("dark") ? "dark" : "light",
-	);
+	const theme = useTheme();
 
 	// Pre-compute color lookup table
 	const colorLutRef = useRef<Uint8ClampedArray>(new Uint8ClampedArray(256 * 4));
-
-	// Watch for theme changes
-	useEffect(() => {
-		const observer = new MutationObserver(() => {
-			setTheme(document.documentElement.classList.contains("dark") ? "dark" : "light");
-		});
-		observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
-		return () => observer.disconnect();
-	}, []);
 
 	// Build the color LUT once. The 256 entries span the normalized 0-1 range that
 	// the draw loop maps real dB values into, independent of the current minDb/maxDb.
@@ -242,7 +232,7 @@ export const SpectrogramDisplay = ({
 						className={`px-2 py-1 text-xs rounded border transition-colors ${
 							isPaused
 								? "border-yellow-500 bg-yellow-500/10 text-yellow-500"
-								: "border-border hover:bg-accent"
+								: "border-border hover:bg-muted"
 						}`}
 					>
 						{isPaused ? "Resume" : "Pause"}
@@ -250,7 +240,7 @@ export const SpectrogramDisplay = ({
 					<button
 						type="button"
 						onClick={clearHistory}
-						className="px-2 py-1 text-xs rounded border border-border hover:bg-accent"
+						className="px-2 py-1 text-xs rounded border border-border hover:bg-muted"
 					>
 						Clear
 					</button>

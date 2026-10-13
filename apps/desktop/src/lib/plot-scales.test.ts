@@ -1,5 +1,13 @@
 import { describe, expect, it } from "bun:test";
-import { formatDelta, logFrequencyToPixel, nearestIndex, pixelToLogFrequency } from "./plot-scales";
+import {
+	dbSplits,
+	exactRange,
+	formatDelta,
+	formatFrequencyTick,
+	logFrequencyToPixel,
+	nearestIndex,
+	pixelToLogFrequency,
+} from "./plot-scales";
 import { applyPan, applyZoom } from "./plot-scales";
 
 describe("log frequency mapping", () => {
@@ -103,5 +111,27 @@ describe("applyPan", () => {
 		const [lo, hi] = applyPan([20, 200], -1, limits);
 		expect(lo).toBeGreaterThanOrEqual(20);
 		expect(hi - lo).toBeCloseTo(180, 0);
+	});
+});
+
+describe("frequency axis helpers", () => {
+	it("labels the 1-2-5 series and blanks filtered ticks", () => {
+		expect([20, 500, 1000, 20000, null].map(formatFrequencyTick)).toEqual([
+			"20",
+			"500",
+			"1k",
+			"20k",
+			"",
+		]);
+	});
+
+	it("passes the requested range through instead of widening to decades", () => {
+		expect(exactRange(null, 20, 20000)).toEqual([20, 20000]);
+	});
+
+	it("steps dB ticks to fit the range", () => {
+		expect(dbSplits(-40, 20)).toEqual([-40, -30, -20, -10, 0, 10, 20]);
+		expect(dbSplits(-10, 5)).toEqual([-10, -5, 0, 5]);
+		expect(dbSplits(-3, 3)).toEqual([-2, 0, 2]);
 	});
 });

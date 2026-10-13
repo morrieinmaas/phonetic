@@ -93,3 +93,30 @@ export const applyPan = (range: Range, deltaFraction: number, limits: Range): Ra
 	newLo = Math.max(limits[0], Math.min(limits[1] - width, newLo));
 	return [newLo, newLo + width];
 };
+
+/** Tick positions for a 20 Hz to 20 kHz log axis: the 1-2-5 series an engineer reads. */
+export const FREQUENCY_SPLITS = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000];
+
+/** "20", "500", "1k", "20k". Null ticks (filtered out by uPlot) stay blank. */
+export const formatFrequencyTick = (value: number | null): string => {
+	if (value === null) return "";
+	return value >= 1000 ? `${value / 1000}k` : String(Math.round(value));
+};
+
+/**
+ * Scale range that returns exactly what it is given. uPlot's default for a log
+ * scale widens to whole decades, which drew 20 Hz to 20 kHz as 20 Hz to 100 kHz
+ * and left a fifth of every plot empty.
+ */
+export const exactRange = (_u: unknown, min: number, max: number): [number, number] => [min, max];
+
+/** Keep every split. uPlot's log-axis filter blanks all but powers of ten. */
+export const keepAllSplits = (_u: unknown, splits: number[]): number[] => splits;
+
+/** Evenly stepped dB ticks for whatever range auto-zoom picked. */
+export const dbSplits = (min: number, max: number): number[] => {
+	const span = max - min;
+	const step = span > 60 ? 20 : span > 30 ? 10 : span > 12 ? 5 : 2;
+	const first = Math.ceil(min / step) * step;
+	return Array.from({ length: Math.floor((max - first) / step) + 1 }, (_, i) => first + i * step);
+};
