@@ -127,9 +127,9 @@ check: lint clippy fmt-rust-check
 # Testing
 # ============================================================================
 
-# Run TypeScript tests (skip if none exist)
+# Run TypeScript tests (from the app dir, where bunfig.toml preloads the DOM)
 test-ts:
-    bun test || echo "No TypeScript tests found"
+    cd {{desktop}} && bun test
 
 # Run Rust tests
 test-rust:
@@ -139,11 +139,11 @@ test-rust:
 test-accuracy:
     cd {{tauri}} && cargo test --test dsp_accuracy -- --nocapture
 
-# Run the channel matrix tests (Rust + TS)
+# Run the measurement routing tests (Rust + TS)
 test-matrix:
     cd {{tauri}} && cargo test routing
     cd {{tauri}} && cargo test --lib audio::engine
-    cd {{desktop}} && bun test src/components/channel-matrix.test.tsx
+    cd {{desktop}} && bun test src/components/measurement-list.test.tsx
 
 # Sustained-load test for 32 pairs (release build, ~1 min)
 soak-matrix:
@@ -177,7 +177,7 @@ test-rust-coverage:
 
 # Run TypeScript tests with coverage
 test-ts-coverage:
-    bun test --coverage || echo "No TypeScript tests found"
+    cd {{desktop}} && bun test --coverage
 
 # Run the end-to-end suite (requires a release build)
 test-e2e: build-release
@@ -213,8 +213,7 @@ ci-install:
 ci-check: lint clippy fmt-rust-check
 
 # CI: Run all tests
-ci-test: test-rust
-    bun test || true
+ci-test: test-rust test-ts
 
 # CI: Build release
 ci-build: build-frontend
