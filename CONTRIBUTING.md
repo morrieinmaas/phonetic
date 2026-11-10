@@ -10,6 +10,11 @@ Thanks for helping. Phonetic is small; a short issue or a focused pull request i
   ...) or paper you are implementing in the pull request.
 - macOS and Linux only. Windows is out of scope; please do not add Windows code paths.
 
+## Reporting bugs
+
+Use the bug report form. Include the Phonetic version (Settings, bottom), your OS and chip,
+and your audio interface. Security problems go to [SECURITY.md](SECURITY.md), not an issue.
+
 ## Setup
 
 See [Build from source](README.md#build-from-source). `just install` fetches the toolchains and
@@ -34,6 +39,17 @@ dependencies, `just dev` runs the app with hot reload.
 
 ## Licence of contributions
 
-By submitting a pull request you agree that your contribution is licensed under the project's
-[LICENSE](LICENSE), Apache 2.0 with the Commons Clause, as described in section 5 of the Apache
-licence. You keep your copyright.
+By submitting a pull request you agree that:
+
+1. your contribution is licensed under the project's [LICENSE](LICENSE), Apache 2.0 with the
+   Commons Clause, as described in section 5 of the Apache licence; and
+2. the maintainer may also license your contribution to others on different terms, for example
+   when granting someone written permission to sell a product built on Phonetic.
+
+You keep your copyright. Point 2 exists because the Commons Clause forbids selling without
+permission, and that permission can only be given for the whole codebase if contributed code is
+covered too. Only submit work you have the right to license this way.
+
+## Code of conduct
+
+Be kind and stay on topic; see [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).

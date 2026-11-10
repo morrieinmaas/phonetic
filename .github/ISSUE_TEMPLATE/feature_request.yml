@@ -1,0 +1,20 @@
+name: Feature request
+description: Suggest a measurement, view or workflow improvement.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do
+      description: The job in the field, not the solution. "Align a delay tower to the mains" beats "add a button".
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
+  - type: input
+    id: reference
+    attributes:
+      label: Standard or reference
+      description: For new measurement maths, the standard or paper it follows (IEC 61672, ISO 3382 ...).

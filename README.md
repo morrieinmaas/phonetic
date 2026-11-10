@@ -3,7 +3,7 @@
 Phonetic is a free audio measurement app for macOS and Linux. Plug in an audio interface and a
 measurement microphone, and it shows you what a loudspeaker or a room actually does to sound:
 frequency response, phase, delay, reverberation time, sound pressure level, noise exposure and
-room noise ratings. It does what Smaart or SysTune do, costs nothing, and the source is open.
+room noise ratings. It does what Smaart or SysTune do, costs nothing, and the source is public.
 
 It is for live sound engineers, installers, studio builders, acousticians and anyone who wants
 numbers instead of guesses when tuning a PA, aligning speakers or treating a room.
@@ -18,7 +18,9 @@ numbers instead of guesses when tuning a PA, aligning speakers or treating a roo
 4. Readings can be calibrated to real dB SPL with the calibration file that came with your
    microphone, saved as sessions, and exported as CSV, JSON or Smaart-compatible text.
 
-No account, no internet connection, no telemetry. Everything runs on your computer.
+No account, no telemetry. Everything runs on your computer; the only network request is the
+update check described below, which asks GitHub for the latest version number and sends nothing
+about you.
 
 ## Install
 
@@ -48,7 +50,7 @@ button too.
 ### macOS
 
 Phonetic is not signed with an Apple Developer ID, because that costs 99 dollars a year for
-free software. macOS therefore blocks the first launch and you have to approve it once. Every
+a free app. macOS therefore blocks the first launch and you have to approve it once. Every
 release is built in public by GitHub from the tagged source, so what you approve is exactly
 what is in this repository.
 
@@ -188,15 +190,20 @@ just cli-release          # the headless CLI only
 Every push runs lint, both test suites, the CLI selftest and a debug bundle on macOS arm64,
 macOS Intel, Linux x86_64 and Linux arm64. `just tag x.y.z` pushes a tag, which builds the
 release installers on all four and publishes them with a changelog. See
-[CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+[CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request and
+[SECURITY.md](SECURITY.md) for reporting vulnerabilities.
 
 ## License
 
 Apache License 2.0 with the [Commons Clause](https://commonsclause.com) condition; see
 [LICENSE](LICENSE). In short: use it, modify it, redistribute it, use it on paid jobs, but
 you may not sell Phonetic itself or a product or service whose value comes substantially
-from it. Want to? Or anything else? Write to mo [at] traect [dot] dev.
+from it, without written permission. Want to? Or anything else? Write to
+mo [at] traect [dot] dev.
 
-Phonetic is free software and comes with **no warranty or guarantee of any kind**. Its
+This makes Phonetic source-available rather than open source in the OSI sense: the code is
+public and free to use, change and share, but commercial resale needs permission.
+
+Phonetic is free to use and comes with **no warranty or guarantee of any kind**. Its
 readings are not certified; verify independently before relying on them for compliance,
 safety or legal purposes.
